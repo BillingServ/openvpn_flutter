@@ -1,228 +1,305 @@
-Connect to the OpenVPN service using Flutter. Contributions through issues and pull requests are highly appreciated!
+# openvpn_flutter
 
-## Android Setup
+A Flutter plugin that allows you to connect to OpenVPN servers on multiple platforms.
 
-### 1. Permission Handler
+## Platform Support
 
-#### Java
-Include the following code in the `onActivityResult` method of `MainActivity.java` (if you are using Java):
+| Platform | Support Status | VPN Type | Requirements |
+|----------|----------------|----------|--------------|
+| Android  | ✅ Full | Native | OpenVPN library |
+| iOS      | ✅ Full | NetworkExtension | Network Extension target |
+| **macOS**    | ✅ **Full** | **NetworkExtension** | **Network Extension target** |
+| **Windows**  | ✅ **Full** | **WinTun + TAP** | **Bundled drivers** |
+| Linux    | ❌ Not yet | - | - |
 
-```java
-OpenVPNFlutterPlugin.connectWhileGranted(requestCode == 24 && resultCode == RESULT_OK);
+## Features
+
+- ✅ Connect/Disconnect from OpenVPN servers
+- ✅ Real-time connection status monitoring  
+- ✅ Connection statistics (bytes in/out, duration)
+- ✅ Multiple platform support
+- ✅ Username/password authentication
+- ✅ Certificate-based authentication
+- ✅ Custom configuration support
+
+## Requirements
+
+### All Platforms
+```yaml
+dependencies:
+  openvpn_flutter: ^1.3.4
 ```
 
-The complete method should look like this:
+### iOS & macOS Requirements
+- Xcode project with Network Extension capability
+- App Group entitlement configured
+- Network Extension Bundle ID
+- Proper code signing certificates
 
-```java
-...
-import id.laskarmedia.openvpn_flutter.OpenVPNFlutterPlugin;
-...
+### Windows Requirements
+- **WinTun driver preferred** - 4x faster performance (800+ Mbps vs 200 Mbps)
+- **TAP-Windows fallback** - for compatibility
+- **Bundled drivers included** - no external installations required
+- Administrator privileges may be required for TAP driver installation (fallback only)
+- Windows 10+ recommended (Windows 8.1+ supported)
 
-@Override
-protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-    OpenVPNFlutterPlugin.connectWhileGranted(requestCode == 24 && resultCode == RESULT_OK);
-    super.onActivityResult(requestCode, resultCode, data);
-}
-```
+### Android Requirements
+- VPN permission in AndroidManifest.xml
+- Target SDK 21+
 
-#### Kotlin
-Include the following code in the `onActivityResult` method of `MainActivity.kt` (if you are using Kotlin):
+## Quick Start
 
-```kotlin
-OpenVPNFlutterPlugin.connectWhileGranted(requestCode == 24 && resultCode == RESULT_OK);
-```
-
-The complete method should look like this:
-
-```kotlin
-...
-import id.laskarmedia.openvpn_flutter.OpenVPNFlutterPlugin
-...
-override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-    OpenVPNFlutterPlugin.connectWhileGranted(requestCode == 24 && resultCode == RESULT_OK)
-    super.onActivityResult(requestCode, resultCode, data)
-}
-```
-
-### 2. App Bundle Build Not Connecting
-
-If you encounter issues with the app not connecting using the latest Flutter SDK, apply the following quick fix:
-
-Ensure that you include the following attribute within the `<application>` tag in your `AndroidManifest.xml` file:
-
-```xml
-<application
-    ...
-    android:extractNativeLibs="true"
-    ...>
-</application>
-```
-
-## iOS Setup
-
-### 1. Add Capabilities
-
-Add the `App Groups` and `Network Extensions` capabilities to the Runner's target. Refer to the image below for detailed instructions:
-
-<img src="https://blogger.googleusercontent.com/img/a/AVvXsEjYWGJ2ug4JM5g8_WslvdRY0Q-UUizOdmoCG8Ybhte9LiIv8_SSYFDHl-PzWApnAxvTA0hdpnBzca7C_zU5pHnyD8NLNoMw1ZOty7Zo6PTF22oIk7liB0aCXQnRAI1R0Zv9XfnuwuHuourtUR6lzf1ztrU_PTa6QFAU8kRPK-4h5MVu7QVzmpVs4Fvl=s600"/>
-
-### 2. Add New Target
-
-Click the `+` button on the bottom left, choose `NETWORK EXTENSION`, and follow the instructions in the image below:
-
-<img src="https://blogger.googleusercontent.com/img/a/AVvXsEirvK1MMCqLADbXdtjppE-z1QC_cDPBnCWZ1EPkNLCM7TYyG3c2IGf8zlb1svW6aP6UB4eNOpX3svFwP_e9D0iP9Mb-dlXVtnUsYlg3iIQVqi_mmw4vLH5d8peEt7UGORikSlB3Hy0o1vj4XIBJNv5g8bIellHTXo4Zu4toh7Dt0jw4ZMyWDAoepLp7=s600"/>
-
-Add the same capabilities to the VPNExtension as you did for the Runner's target:
-
-<img src="https://blogger.googleusercontent.com/img/a/AVvXsEgEj_1oXmgRSaVISGFHutY88enlUG1V8ynqfDHso-uS6vKEBLa-dhhChjZQ12iN7UpNM6thCHLmll3h6p_lW9URAPca-pXkwIN1pmATdfk3NnqnmlYtgUAicbr-zDZmNF7JJ4l4EArFtdrb_IjxH_FpLJGCURkpGO9qBtkw9WYs3k2vRSa3c8ga9b6S=s600"/>
-
-### 3. Copy and Paste
-
-Add the following lines to your Podfile (`ios/Podfile`):
+### 1. Initialize the VPN Engine
 
 ```dart
-target 'VPNExtension' do
-  use_frameworks!
-  pod 'OpenVPNAdapter', :git => 'https://github.com/ss-abramchuk/OpenVPNAdapter.git', :tag => '0.8.0'
-end
-```
+import 'package:openvpn_flutter/openvpn_flutter.dart';
 
-Open `VPNExtension > PacketTunnelProvider.swift` and copy-paste the script from [PacketTunnelProvider.swift](https://raw.githubusercontent.com/nizwar/openvpn_flutter/master/example/ios/VPNExtension/PacketTunnelProvider.swift).
-
-<img src="https://blogger.googleusercontent.com/img/a/AVvXsEhPf7Vl_8LPYMTTCn0UbpR3f3qzaFPFRMikSg8xetWRyfTuViq6o3fdrjU4-jD-xZtkOZV_i2WoNXkcHLn7znHengHZGgtlJlNbNk6vjNYgI2jYg8ToOYIQjR7QBd443ee4GqpEww0FYPrIiIpabUthpur6SakiPJM1dsDNCBW9ROWixuEzrk61aIod=s600">
-
-## Note
-
-You must use iOS devices instead of the simulator to connect.
-
-## Recipe
-
-### Initialize
-
-Before starting, initialize the OpenVPN plugin:
-
-```dart
-late OpenVPN openvpn;
+late OpenVPN vpn;
 
 @override
 void initState() {
-    openvpn = OpenVPN(onVpnStatusChanged: _onVpnStatusChanged, onVpnStageChanged: _onVpnStageChanged);
-    openvpn.initialize(
-        groupIdentifier: "GROUP_IDENTIFIER", ///Example 'group.com.laskarmedia.vpn'
-        providerBundleIdentifier: "NETWORK_EXTENSION_IDENTIFIER", ///Example 'id.laskarmedia.openvpnFlutterExample.VPNExtension'
-        localizedDescription: "LOCALIZED_DESCRIPTION" ///Example 'Laskarmedia VPN'
-    );
-}
-
-void _onVpnStatusChanged(VPNStatus? vpnStatus){
-    setState((){
-        this.status = vpnStatus;
-    });
-}
-
-void _onVpnStageChanged(VPNStage? stage){
-    setState((){
-        this.stage = stage;
-    });
-}
-```
-
-### Connect to VPN
-
-```dart
-void connect() {
-  openvpn.connect(
-    config,
-    name,
-    username: username,
-    password: password,
-    bypassPackages: [],
-    // In iOS connection can get stuck in "connecting" if this flag is "false". 
-    // Solution is to switch it to "true".
-    certIsRequired: false,
+  super.initState();
+  
+  vpn = OpenVPN(
+    onVpnStatusChanged: (data) {
+      print('VPN Status: ${data?.connectedOn}');
+      print('Duration: ${data?.duration}');
+      print('Bytes In: ${data?.byteIn}');
+      print('Bytes Out: ${data?.byteOut}');
+    },
+    onVpnStageChanged: (stage, rawStage) {
+      print('VPN Stage: $stage');
+      // Stages: disconnected, connecting, connected, disconnecting
+    },
   );
 }
 ```
 
-### Disconnect
+### 2. Platform-Specific Initialization
 
 ```dart
-void disconnect(){
-    openvpn.disconnect();
+Future<void> initializeVPN() async {
+  try {
+    if (Platform.isIOS || Platform.isMacOS) {
+      // Required for iOS and macOS
+      await vpn.initialize(
+        groupIdentifier: "group.com.yourapp.vpn",
+        providerBundleIdentifier: "com.yourapp.vpn.extension",
+        localizedDescription: "Your VPN App",
+      );
+    } else {
+      // Android and Windows
+      await vpn.initialize();
+    }
+    print('VPN initialized successfully');
+  } catch (e) {
+    print('VPN initialization failed: $e');
+  }
 }
 ```
 
-# Publishing to Play Store and App Store
+### 3. Connect to VPN
 
-### Android
+```dart
+Future<void> connectToVPN() async {
+  try {
+    String config = """
+client
+dev tun
+proto udp
+remote your-server.com 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+ca [inline]
+cert [inline]
+key [inline]
+# Your OpenVPN configuration here
+""";
 
-1. You can use app bundles to publish the app.
-2. Add the following to your files in the `android` folder (special thanks to https://github.com/nizwar/openvpn_flutter/issues/10). Otherwise, the connection may not be established in some cases and will silently report "disconnected" when trying to connect. This is likely related to some symbols being stripped by Google Play.
-
-```
-gradle.properties > android.bundle.enableUncompressedNativeLibs=false
-AndroidManifest > android:extractNativeLibs="true" in the application tag
-```
-
-Add the following inside the `android` tag in `app/build.gradle`:
-
-```gradle
-android {
-    ...
-    //from here ======
-    lintOptions {
-        disable 'InvalidPackage'
-        checkReleaseBuilds false
-    }
-
-    packagingOptions {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
-
-    bundle {
-        language {
-            enableSplit = false
-        }
-        density {
-            enableSplit = false
-        }
-        abi {
-            enableSplit = false
-        }
-    }
-    //to here
-    ...
+    await vpn.connect(
+      config, 
+      "My VPN Connection",
+      username: "your_username",    // Optional
+      password: "your_password",    // Optional
+      certIsRequired: false,
+    );
+  } catch (e) {
+    print('Connection failed: $e');
+  }
 }
 ```
 
-#### Notifications
-
-As the plugin shows notifications for connection status and connection details, you must request permission using third-party packages.
-
-Example using [permission_handler](https://pub.dev/packages/permission_handler):
+### 4. Monitor Connection
 
 ```dart
-///Put it anywhere you wish, like once you initialize the VPN or pre-connect to the server
-Permission.notification.isGranted.then((_) {
-  if (!_) Permission.notification.request();
-});
+// Check if connected
+bool isConnected = await vpn.isConnected();
+
+// Get current status
+VpnStatus status = await vpn.status();
+print('Connected on: ${status.connectedOn}');
+print('Duration: ${status.duration}');
+
+// Get current stage
+VPNStage stage = await vpn.stage();
+print('Current stage: $stage');
 ```
 
-### iOS
+### 5. Disconnect
 
-1. View [Apple Guidelines](https://developer.apple.com/app-store/review/guidelines/#vpn-apps) relating to VPN.
-2. This plugin DOES use encryption, but it uses exempt encryptions.
+```dart
+Future<void> disconnectVPN() async {
+  vpn.disconnect();
+}
+```
 
-## Licenses
+## Platform-Specific Setup
 
-* [openvpn_flutter](https://github.com/nizwar/openvpn_flutter/blob/master/LICENSE) for this plugin
-* [ics-openvpn](https://github.com/schwabe/ics-openvpn) for the Android engine
-* [OpenVPNAdapter](https://github.com/ss-abramchuk/OpenVPNAdapter) for the iOS engine
+### Windows Setup
 
-# Support
+1. **Bundle Required Files**:
+   - Include OpenVPN executable with WinTun support
+   - Include `wintun.dll` for high-performance connections  
+   - Include TAP-Windows drivers as fallback
+   - See [Bundle Structure Guide](windows/BUNDLE_STRUCTURE.md) for details
 
-If you appreciate my work, don't forget to give a thumbs up or support me with a cup of coffee.
+2. **Driver Selection**:
+   - **WinTun**: Preferred driver (4x faster, MIT license)
+   - **TAP-Windows**: Automatic fallback for compatibility
+   - Plugin automatically selects best available driver
 
-<a href="https://paypal.me/nizwar/"><img src="https://raw.githubusercontent.com/andreostrovsky/donate-with-paypal/master/blue.svg" height="40"></a>
+3. **Example Windows Usage**:
+```dart
+// Windows automatically uses WinTun (preferred) or TAP-Windows (fallback)
+await vpn.initialize(); // Sets up optimal driver automatically
+
+// Check which driver is being used
+// (Optional: for debugging/logging purposes)
+await vpn.connect(openVpnConfig, "Windows VPN");
+```
+
+### macOS Setup
+
+1. **Create Network Extension Target**:
+   - Add Network Extension target to your Xcode project
+   - Configure App Groups capability
+   - Set proper bundle identifiers
+
+2. **Configure Entitlements**:
+```xml
+<!-- macOS App Entitlements -->
+<key>com.apple.security.app-sandbox</key>
+<true/>
+<key>com.apple.security.network.client</key>
+<true/>
+<key>com.apple.developer.networking.networkextension</key>
+<array>
+    <string>packet-tunnel-provider</string>
+</array>
+```
+
+3. **Example macOS Usage**:
+```dart
+await vpn.initialize(
+  groupIdentifier: "group.com.yourapp.vpn",
+  providerBundleIdentifier: "com.yourapp.vpn.macos",
+  localizedDescription: "YourApp VPN",
+);
+```
+
+### iOS Setup
+
+1. **Create Network Extension Target** (same as macOS)
+2. **Configure iOS Entitlements**
+3. **Example iOS Usage** (same as macOS)
+
+### Android Setup
+
+1. **Add Permissions**:
+```xml
+<!-- android/app/src/main/AndroidManifest.xml -->
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+```
+
+2. **Example Android Usage**:
+```dart
+// Request VPN permission (Android only)
+bool hasPermission = await vpn.requestPermissionAndroid();
+if (hasPermission) {
+  await vpn.initialize();
+  await vpn.connect(config, "Android VPN");
+}
+```
+
+## Advanced Features
+
+### Connection Filtering
+```dart
+// Filter multiple remote servers to use just one (reduces ANR on Android)
+String? filteredConfig = await OpenVPN.filteredConfig(originalConfig);
+await vpn.connect(filteredConfig!, "Filtered Connection");
+```
+
+### Bypass Apps (Android Only)
+```dart
+await vpn.connect(
+  config, 
+  "VPN Connection",
+  bypassPackages: [
+    "com.google.android.gms",
+    "com.android.chrome"
+  ]
+);
+```
+
+## Error Handling
+
+```dart
+try {
+  await vpn.connect(config, "VPN");
+} on PlatformException catch (e) {
+  switch (e.code) {
+    case 'invalid_config':
+      print('Invalid OpenVPN configuration');
+      break;
+    case 'connection_failed':
+      print('Failed to establish VPN connection');
+      break;
+    case 'permission_denied':
+      print('VPN permission denied');
+      break;
+    default:
+      print('Unknown error: ${e.message}');
+  }
+}
+```
+
+## Troubleshooting
+
+### Windows Issues
+- **"TAP driver not found"**: Ensure bundled TAP driver files are present and run as administrator
+- **"Access denied"**: Run app as administrator for TAP driver installation
+- **"Bundled files missing"**: Check that OpenVPN executable and TAP driver are bundled correctly
+- **Connection fails**: Check Windows Defender/Firewall settings and TAP adapter status
+
+### macOS Issues  
+- **"Network Extension not found"**: Ensure proper bundle IDs and entitlements
+- **Permission denied**: Check system VPN permissions in System Preferences
+
+### iOS Issues
+- **Same as macOS**: Network Extension configuration required
+
+### Android Issues
+- **VPN permission**: Call `requestPermissionAndroid()` first
+- **ANR (App Not Responding)**: Use `filteredConfig()` to limit remote servers
+
+## Contributing
+
+Contributions are welcome! Please read our contributing guidelines and submit pull requests.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

@@ -24,3 +24,7 @@ flutter:
         pluginClass: OpenVPNFlutterPlugin
       ios:
         pluginClass: OpenVPNFlutterPlugin
+      windows:
+        pluginClass: OpenVPNFlutterPlugin
+      macos:
+        pluginClass: OpenVPNFlutterPlugin

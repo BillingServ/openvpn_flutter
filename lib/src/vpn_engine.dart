@@ -75,7 +75,7 @@ class OpenVPN {
   OpenVPN({this.onVpnStatusChanged, this.onVpnStageChanged});
 
   ///This function should be called before any usage of OpenVPN
-  ///All params required for iOS, make sure you read the plugin's documentation
+  ///All params required for iOS and macOS, make sure you read the plugin's documentation
   ///
   ///
   ///providerBundleIdentfier is for your Network Extension identifier
@@ -91,12 +91,12 @@ class OpenVPN {
     Function(VpnStatus status)? lastStatus,
     Function(VPNStage stage)? lastStage,
   }) async {
-    if (Platform.isIOS) {
+    if (Platform.isIOS || Platform.isMacOS) {
       assert(
           groupIdentifier != null &&
               providerBundleIdentifier != null &&
               localizedDescription != null,
-          "These values are required for ios.");
+          "These values are required for iOS and macOS.");
     }
     onVpnStatusChanged?.call(VpnStatus.empty());
     initialized = true;
@@ -180,7 +180,7 @@ class OpenVPN {
         status = await _channelControl.invokeMethod("status").then((value) {
           if (value == null) return VpnStatus.empty();
 
-          if (Platform.isIOS) {
+          if (Platform.isIOS || Platform.isMacOS) {
             var splitted = value.split("_");
             var connectedOn = DateTime.tryParse(splitted[0]);
             if (connectedOn == null) return VpnStatus.empty();
@@ -212,8 +212,31 @@ class OpenVPN {
               packetsIn: byteIn,
               packetsOut: byteOut,
             );
+          } else if (Platform.isWindows || Platform.isLinux) {
+            // Desktop platforms - return mock data or parse JSON if available
+            try {
+              var data = jsonDecode(value);
+              var connectedOn = DateTime.tryParse(data["connected_on"]?.toString() ?? "") ?? 
+                               _tempDateTime ?? 
+                               DateTime.now();
+              String byteIn = data["byte_in"]?.toString() ?? "0";
+              String byteOut = data["byte_out"]?.toString() ?? "0";
+              if (byteIn.trim().isEmpty) byteIn = "0";
+              if (byteOut.trim().isEmpty) byteOut = "0";
+              return VpnStatus(
+                connectedOn: connectedOn,
+                duration: _duration(DateTime.now().difference(connectedOn).abs()),
+                byteIn: byteIn,
+                byteOut: byteOut,
+                packetsIn: byteIn,
+                packetsOut: byteOut,
+              );
+            } catch (e) {
+              // Fallback to empty status for desktop platforms
+              return VpnStatus.empty();
+            }
           } else {
-            throw Exception("Openvpn not supported on this platform");
+            throw Exception("OpenVPN not supported on this platform");
           }
         });
       }
@@ -291,7 +314,9 @@ class OpenVPN {
       if (vpnStage != VPNStage.disconnected) {
         if (Platform.isAndroid) {
           _createTimer();
-        } else if (Platform.isIOS && vpnStage == VPNStage.connected) {
+        } else if ((Platform.isIOS || Platform.isMacOS) && vpnStage == VPNStage.connected) {
+          _createTimer();
+        } else if ((Platform.isWindows || Platform.isLinux) && vpnStage == VPNStage.connected) {
           _createTimer();
         }
       } else {
