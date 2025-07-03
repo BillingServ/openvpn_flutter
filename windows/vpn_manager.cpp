@@ -610,13 +610,8 @@ std::string VPNManager::findTapAdapter() {
                 if (adapter->Description && 
                     (wcsstr(adapter->Description, L"TAP-Windows") != NULL || 
                      wcsstr(adapter->Description, L"TAP-Win32") != NULL)) {
-                    // Convert wide string to multibyte string
-                    int size = WideCharToMultiByte(CP_UTF8, 0, adapter->AdapterName, -1, NULL, 0, NULL, NULL);
-                    if (size > 0) {
-                        std::vector<char> mbStr(size);
-                        WideCharToMultiByte(CP_UTF8, 0, adapter->AdapterName, -1, mbStr.data(), size, NULL, NULL);
-                        return std::string(mbStr.data());
-                    }
+                    // AdapterName is already a narrow string (PCHAR)
+                    return std::string(adapter->AdapterName);
                 }
             }
         }
