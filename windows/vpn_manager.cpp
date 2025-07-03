@@ -104,7 +104,6 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         }
         
         // Start OpenVPN process (already elevated since app is running as admin)
-        PROCESS_INFORMATION processInfo;
         STARTUPINFOA startupInfo;
         ZeroMemory(&processInfo, sizeof(processInfo));
         ZeroMemory(&startupInfo, sizeof(startupInfo));
@@ -130,8 +129,6 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         
         if (success && processInfo.hProcess) {
             hProcess = processInfo.hProcess;
-            // Store process info
-            this->processInfo = processInfo;
             
             isConnecting = true;
             updateStatus("connecting");
