@@ -90,17 +90,8 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             }
         }
         
-        // Add management interface for monitoring  
-        cmdStream << " --management 127.0.0.1 7505";
-        cmdStream << " --management-query-passwords";
-        cmdStream << " --management-hold";
-        cmdStream << " --management-client";
-        
         // Add Windows-specific options
         cmdStream << " --verb 3";
-        cmdStream << " --redirect-gateway def1";
-        cmdStream << " --dhcp-option DNS 8.8.8.8";
-        cmdStream << " --dhcp-option DNS 8.8.4.4";
         
         std::string cmdLine = cmdStream.str();
         std::cout << "OpenVPN command line: " << cmdLine << std::endl;
