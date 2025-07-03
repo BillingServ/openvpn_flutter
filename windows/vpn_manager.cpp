@@ -110,9 +110,13 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         sei.cbSize = sizeof(sei);
         sei.lpVerb = "runas";  // Request elevation
         sei.lpFile = openVPNPath.c_str();
-        sei.lpParameters = cmdLine.substr(cmdLine.find(' ') + 1).c_str(); // Remove executable path from parameters
+        std::string parameters = cmdLine.substr(cmdLine.find(' ') + 1);
+        sei.lpParameters = parameters.c_str(); // Remove executable path from parameters
         sei.nShow = SW_HIDE;
         sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+        
+        std::cout << "Executable: " << sei.lpFile << std::endl;
+        std::cout << "Parameters: " << sei.lpParameters << std::endl;
         
         BOOL success = ShellExecuteExA(&sei);
         
@@ -538,13 +542,11 @@ void VPNManager::processPendingStatusUpdates() {
 
 bool VPNManager::createConfigFile(const std::string& config, const std::string& username, const std::string& password) {
     try {
-        char tempPath[MAX_PATH];
-        DWORD result = GetTempPathA(MAX_PATH, tempPath);
-        if (result == 0) {
-            return false;
-        }
+        // Use app directory instead of user temp to ensure elevated process can access it
+        std::string appDir = getAppDirectory();
+        currentConfigPath = appDir + "\\openvpn_flutter_config.ovpn";
         
-        currentConfigPath = std::string(tempPath) + "openvpn_flutter_config.ovpn";
+        std::cout << "Creating config file at: " << currentConfigPath << std::endl;
         
         std::ofstream configFile(currentConfigPath);
         if (!configFile.is_open()) {
@@ -580,6 +582,8 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
         
         configFile << modifiedConfig;
         
+        std::cout << "Modified config (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
+        
         // Add driver-specific configuration
         if (currentDriver == DriverType::WINTUN) {
             configFile << "\nwindows-driver wintun";
@@ -595,7 +599,7 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
         }
         
         if (!username.empty() && !password.empty()) {
-            std::string authPath = std::string(tempPath) + "openvpn_flutter_auth.txt";
+            std::string authPath = appDir + "\\openvpn_flutter_auth.txt";
             
             std::ofstream authFile(authPath);
             if (authFile.is_open()) {
