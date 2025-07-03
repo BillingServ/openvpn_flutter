@@ -1,3 +1,10 @@
+#define _CRT_SECURE_NO_WARNINGS
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2ipdef.h>
+#include <iphlpapi.h>
+
 #include "vpn_manager.h"
 #include <fstream>
 #include <sstream>
@@ -9,12 +16,12 @@
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <winreg.h>
-#include <iphlpapi.h>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 namespace openvpn_flutter {
 
