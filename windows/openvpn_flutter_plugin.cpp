@@ -17,6 +17,7 @@
 #include <sstream>
 
 #include "include/openvpn_flutter/openvpn_flutter_plugin_c_api.h"
+#include "include/openvpn_flutter/open_v_p_n_flutter_plugin.h"
 
 namespace openvpn_flutter {
 
@@ -233,7 +234,7 @@ void OpenVPNFlutterPluginCApiRegisterWithRegistrar(
 }
 
 // This is the function Flutter expects based on the plugin name
-void OpenVPNFlutterPluginRegisterWithRegistrar(
+FLUTTER_PLUGIN_EXPORT void OpenVPNFlutterPluginRegisterWithRegistrar(
     FlutterDesktopPluginRegistrarRef registrar) {
   openvpn_flutter::OpenVPNFlutterPlugin::RegisterWithRegistrar(
       flutter::PluginRegistrarManager::GetInstance()
