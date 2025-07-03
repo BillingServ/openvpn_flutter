@@ -121,9 +121,7 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             // Initialize processInfo for compatibility
             ZeroMemory(&processInfo, sizeof(processInfo));
             processInfo.hProcess = sei.hProcess;
-        
-        if (success) {
-            hProcess = processInfo.hProcess;
+            
             isConnecting = true;
             updateStatus("connecting");
             
