@@ -179,18 +179,21 @@ std::string VPNManager::getStatus() {
 }
 
 std::string VPNManager::getConnectionStats() {
-    if (isConnected || isConnecting) {
-        auto now = std::chrono::system_clock::now();
-        auto time_t = std::chrono::system_clock::to_time_t(now);
-        
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    
+    // Get real network statistics from the VPN adapter
+    auto [bytesIn, bytesOut] = getRealNetworkStats();
+    
+    // Check if we have any VPN activity (even if connection flags aren't set correctly)
+    bool hasVpnActivity = (bytesIn > 0 || bytesOut > 0) || (isConnected || isConnecting);
+    
+    if (hasVpnActivity) {
         // Calculate connection duration
         auto connectionDuration = std::chrono::duration_cast<std::chrono::seconds>(now - connectionStartTime);
         int hours = static_cast<int>(connectionDuration.count()) / 3600;
         int minutes = (static_cast<int>(connectionDuration.count()) % 3600) / 60;
         int seconds = static_cast<int>(connectionDuration.count()) % 60;
-        
-        // Get real network statistics from the VPN adapter
-        auto [bytesIn, bytesOut] = getRealNetworkStats();
         
         // Calculate speeds
         updateSpeedCalculations(bytesIn, bytesOut, now);
@@ -218,6 +221,7 @@ std::string VPNManager::getConnectionStats() {
             << ",\"speed_in_bps\":\"" << static_cast<uint64_t>(currentSpeedIn) << "\""
             << ",\"speed_out_bps\":\"" << static_cast<uint64_t>(currentSpeedOut) << "\"}";
         
+        std::cout << "🚀 Returning full stats with speeds: " << speedInMbps << " Mbps down, " << speedOutMbps << " Mbps up" << std::endl;
         return oss.str();
     }
     return "{\"connected_on\":null,\"duration\":\"00:00:00\",\"byte_in\":\"0\",\"byte_out\":\"0\",\"packets_in\":\"0\",\"packets_out\":\"0\"}";
