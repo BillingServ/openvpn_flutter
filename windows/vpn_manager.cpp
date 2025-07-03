@@ -96,26 +96,42 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         std::string cmdLine = cmdStream.str();
         std::cout << "OpenVPN command line: " << cmdLine << std::endl;
         
-        // Start OpenVPN process with elevated privileges
-        SHELLEXECUTEINFOA sei = { 0 };
-        sei.cbSize = sizeof(sei);
-        sei.lpVerb = "runas";  // Request elevation
-        sei.lpFile = openVPNPath.c_str();
-        std::string parameters = cmdLine.substr(cmdLine.find(' ') + 1);
-        sei.lpParameters = parameters.c_str(); // Remove executable path from parameters
-        sei.nShow = SW_HIDE;
-        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+        // Check if we're already running as admin
+        if (!isRunningAsAdmin()) {
+            std::cout << "Application is not running as administrator. OpenVPN requires elevated privileges." << std::endl;
+            updateStatus("error");
+            return false;
+        }
         
-        std::cout << "Executable: " << sei.lpFile << std::endl;
-        std::cout << "Parameters: " << sei.lpParameters << std::endl;
+        // Start OpenVPN process (already elevated since app is running as admin)
+        PROCESS_INFORMATION processInfo;
+        STARTUPINFOA startupInfo;
+        ZeroMemory(&processInfo, sizeof(processInfo));
+        ZeroMemory(&startupInfo, sizeof(startupInfo));
+        startupInfo.cb = sizeof(startupInfo);
+        startupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        startupInfo.wShowWindow = SW_HIDE;
         
-        BOOL success = ShellExecuteExA(&sei);
+        std::string fullCmdLine = "\"" + openVPNPath + "\" " + cmdLine.substr(cmdLine.find(' ') + 1);
+        std::cout << "Full command line: " << fullCmdLine << std::endl;
         
-        if (success && sei.hProcess) {
-            hProcess = sei.hProcess;
-            // Initialize processInfo for compatibility
-            ZeroMemory(&processInfo, sizeof(processInfo));
-            processInfo.hProcess = sei.hProcess;
+        BOOL success = CreateProcessA(
+            NULL,                     // Application name
+            (LPSTR)fullCmdLine.c_str(), // Command line
+            NULL,                     // Process security attributes
+            NULL,                     // Thread security attributes
+            FALSE,                    // Inherit handles
+            0,                        // Creation flags
+            NULL,                     // Environment
+            NULL,                     // Current directory
+            &startupInfo,            // Startup info
+            &processInfo             // Process info
+        );
+        
+        if (success && processInfo.hProcess) {
+            hProcess = processInfo.hProcess;
+            // Store process info
+            this->processInfo = processInfo;
             
             isConnecting = true;
             updateStatus("connecting");
