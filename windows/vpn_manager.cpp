@@ -799,8 +799,8 @@ void VPNManager::updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, co
     auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatsTime);
     double timeDiffSeconds = timeDiff.count() / 1000.0;
     
-    // Only calculate if enough time has passed (at least 500ms for accuracy)
-    if (timeDiffSeconds >= 0.5) {
+    // Only calculate if enough time has passed (at least 25ms for ultra-responsive updates)
+    if (timeDiffSeconds >= 0.025) {
         // Calculate byte differences
         uint64_t byteInDiff = bytesIn - lastBytesIn;
         uint64_t byteOutDiff = bytesOut - lastBytesOut;
@@ -809,12 +809,12 @@ void VPNManager::updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, co
         currentSpeedIn = byteInDiff / timeDiffSeconds;
         currentSpeedOut = byteOutDiff / timeDiffSeconds;
         
-        // Smooth the speeds with exponential moving average to reduce jitter
+        // Smooth the speeds with exponential moving average to reduce jitter (ultra-responsive)
         static double smoothedSpeedIn = 0.0;
         static double smoothedSpeedOut = 0.0;
         
-        smoothedSpeedIn = (smoothedSpeedIn * 0.7) + (currentSpeedIn * 0.3);
-        smoothedSpeedOut = (smoothedSpeedOut * 0.7) + (currentSpeedOut * 0.3);
+        smoothedSpeedIn = (smoothedSpeedIn * 0.1) + (currentSpeedIn * 0.9);
+        smoothedSpeedOut = (smoothedSpeedOut * 0.1) + (currentSpeedOut * 0.9);
         
         currentSpeedIn = smoothedSpeedIn;
         currentSpeedOut = smoothedSpeedOut;

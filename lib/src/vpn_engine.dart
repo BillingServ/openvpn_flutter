@@ -332,7 +332,7 @@ class OpenVPN {
       _vpnStatusTimer = null;
     }
     _vpnStatusTimer ??=
-        Timer.periodic(const Duration(seconds: 1), (timer) async {
+        Timer.periodic(const Duration(milliseconds: 250), (timer) async {
       onVpnStatusChanged?.call(await status());
     });
   }
