@@ -79,6 +79,9 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         // Add minimal options
         cmdStream << " --verb 3";
         
+        // Disable DCO to avoid netsh permission issues
+        cmdStream << " --disable-dco";
+        
         std::string cmdLine = cmdStream.str();
         std::cout << "OpenVPN command line: " << cmdLine << std::endl;
         
