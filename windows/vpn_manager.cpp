@@ -5,6 +5,7 @@
 #include <ws2ipdef.h>
 #include <iphlpapi.h>
 #include <netioapi.h>
+#include <ifdef.h>
 
 #include "vpn_manager.h"
 #include <fstream>
@@ -176,9 +177,9 @@ std::string VPNManager::getConnectionStats() {
         
         // Calculate connection duration
         auto connectionDuration = std::chrono::duration_cast<std::chrono::seconds>(now - connectionStartTime);
-        int hours = connectionDuration.count() / 3600;
-        int minutes = (connectionDuration.count() % 3600) / 60;
-        int seconds = connectionDuration.count() % 60;
+        int hours = static_cast<int>(connectionDuration.count()) / 3600;
+        int minutes = (static_cast<int>(connectionDuration.count()) % 3600) / 60;
+        int seconds = static_cast<int>(connectionDuration.count()) % 60;
         
         // Get real network statistics from the VPN adapter
         auto [bytesIn, bytesOut] = getRealNetworkStats();
@@ -743,20 +744,18 @@ std::pair<uint64_t, uint64_t> VPNManager::getRealNetworkStats() {
                      wcsstr(adapter->Description, L"Wintun") != NULL ||
                      wcsstr(adapter->Description, L"Data Channel Offload") != NULL)) {
                     
-                    if (adapter->IfType == IF_TYPE_ETHERNET || adapter->IfType == IF_TYPE_TUNNEL) {
-                        // Get interface statistics using GetIfEntry2
-                        MIB_IF_ROW2 ifRow;
-                        ZeroMemory(&ifRow, sizeof(ifRow));
-                        ifRow.InterfaceIndex = adapter->IfIndex;
+                    // Get interface statistics using GetIfEntry2
+                    MIB_IF_ROW2 ifRow;
+                    ZeroMemory(&ifRow, sizeof(ifRow));
+                    ifRow.InterfaceIndex = adapter->IfIndex;
+                    
+                    if (GetIfEntry2(&ifRow) == NO_ERROR) {
+                        bytesIn += ifRow.InOctets;
+                        bytesOut += ifRow.OutOctets;
                         
-                        if (GetIfEntry2(&ifRow) == NO_ERROR) {
-                            bytesIn += ifRow.InOctets;
-                            bytesOut += ifRow.OutOctets;
-                            
-                            std::wcout << L"Found VPN adapter: " << adapter->Description 
-                                      << L" - In: " << ifRow.InOctets 
-                                      << L" Out: " << ifRow.OutOctets << std::endl;
-                        }
+                        std::wcout << L"Found VPN adapter: " << adapter->Description 
+                                  << L" - In: " << ifRow.InOctets 
+                                  << L" Out: " << ifRow.OutOctets << std::endl;
                     }
                 }
             }
