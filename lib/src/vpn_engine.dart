@@ -135,7 +135,7 @@ class OpenVPN {
       List<String>? bypassPackages,
       bool certIsRequired = false}) {
     if (!initialized) throw ("OpenVPN need to be initialized");
-    if (!certIsRequired) config += "client-cert-not-required";
+    if (!certIsRequired) config += "\nverify-client-cert none";
     _tempDateTime = DateTime.now();
 
     try {

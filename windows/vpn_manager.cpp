@@ -547,9 +547,17 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
         // Process the configuration to replace device directives based on current driver
         std::string modifiedConfig = config;
         
+        // Remove deprecated client-cert-not-required option and replace with modern equivalent
+        size_t pos = 0;
+        while ((pos = modifiedConfig.find("client-cert-not-required", pos)) != std::string::npos) {
+            size_t endPos = modifiedConfig.find('\n', pos);
+            if (endPos == std::string::npos) endPos = modifiedConfig.length();
+            modifiedConfig.erase(pos, endPos - pos + 1);
+        }
+        
         if (currentDriver == DriverType::TAP_WINDOWS) {
             // Replace 'dev tun' with 'dev tap' for TAP-Windows compatibility
-            size_t pos = modifiedConfig.find("dev tun");
+            pos = modifiedConfig.find("dev tun");
             if (pos != std::string::npos) {
                 modifiedConfig.replace(pos, 7, "dev tap"); // Replace "dev tun" with "dev tap"
             }
