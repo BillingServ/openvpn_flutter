@@ -46,8 +46,6 @@ app.*.map.json
 /android/app/release
 
 # OpenVPN related
-windows/bundle/bin/*.exe
-windows/bundle/bin/*.dll
 *.ovpn
 *.key
 *.crt
