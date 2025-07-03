@@ -77,21 +77,32 @@ void OpenVPNFlutterPlugin::HandleMethodCall(
   const auto method_name = method_call.method_name();
 
   if (method_name.compare("initialize") == 0) {
-    // Windows OpenVPN initialization with TAP driver setup
-    bool tapReady = vpnManager->initializeTapDriver();
+    // Windows OpenVPN initialization with driver setup
+    std::cout << "Initializing OpenVPN Flutter plugin for Windows..." << std::endl;
     
-    if (tapReady) {
+    // First try to initialize the driver system
+    bool driverReady = vpnManager->initializeDriver();
+    
+    if (driverReady) {
+      std::cout << "VPN driver initialized successfully" << std::endl;
       if (event_sink_) {
         event_sink_->Success(flutter::EncodableValue("disconnected"));
       }
       result->Success(flutter::EncodableValue("disconnected"));
     } else {
+      std::cerr << "Failed to initialize VPN driver" << std::endl;
       result->Error("initialization_failed", 
-                   "Failed to initialize TAP driver. Please run as administrator or ensure bundled files are present.");
+                   "Failed to initialize VPN driver. Please ensure:\n"
+                   "1. wintun.dll is present in the application directory\n"
+                   "2. TAP-Windows drivers are installed (fallback)\n"
+                   "3. Application has sufficient privileges\n"
+                   "4. Bundled OpenVPN files are present");
     }
     
   } else if (method_name.compare("connect") == 0) {
     // Windows OpenVPN connection - Real implementation using VPNManager
+    std::cout << "Starting VPN connection..." << std::endl;
+    
     const auto* arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
     if (!arguments) {
       result->Error("invalid_arguments", "Invalid arguments provided");
@@ -99,12 +110,19 @@ void OpenVPNFlutterPlugin::HandleMethodCall(
     }
     
     // Extract parameters from arguments
-    std::string config, username, password;
+    std::string config, username, password, name;
     
     auto config_it = arguments->find(flutter::EncodableValue("config"));
     if (config_it != arguments->end()) {
       if (const auto* config_str = std::get_if<std::string>(&config_it->second)) {
         config = *config_str;
+      }
+    }
+    
+    auto name_it = arguments->find(flutter::EncodableValue("name"));
+    if (name_it != arguments->end()) {
+      if (const auto* name_str = std::get_if<std::string>(&name_it->second)) {
+        name = *name_str;
       }
     }
     
@@ -127,11 +145,21 @@ void OpenVPNFlutterPlugin::HandleMethodCall(
       return;
     }
     
+    std::cout << "Connecting to VPN: " << name << std::endl;
+    
     // Start VPN connection using VPNManager
     if (vpnManager->startVPN(config, username, password)) {
+      std::cout << "VPN connection initiated successfully" << std::endl;
       result->Success();
     } else {
-      result->Error("connection_failed", "Failed to start OpenVPN connection. Ensure bundled OpenVPN files are present and TAP driver is installed.");
+      std::cerr << "Failed to start VPN connection" << std::endl;
+      std::string errorMsg = "Failed to start OpenVPN connection. Possible causes:\n"
+                            "1. OpenVPN executable not found (openvpn.exe)\n"
+                            "2. VPN driver not available (WinTun or TAP-Windows)\n"
+                            "3. Invalid configuration file\n"
+                            "4. Insufficient privileges\n"
+                            "5. Another VPN connection is active";
+      result->Error("connection_failed", errorMsg);
     }
     
   } else if (method_name.compare("disconnect") == 0) {

@@ -199,9 +199,7 @@ bool WinTunManager::loadWinTunFunctions() {
 
 std::string WinTunManager::generateAdapterName() {
     // Generate a unique adapter name
-    std::ostringstream oss;
-    oss << "OpenVPN-WinTun-" << GetTickCount();
-    return oss.str();
+    return "OpenVPN-Flutter-" + std::to_string(GetTickCount64());
 }
 
 GUID WinTunManager::generateGuid() {
@@ -210,13 +208,14 @@ GUID WinTunManager::generateGuid() {
         return guid;
     }
     
-    // Fallback: create a deterministic GUID based on current time
+    // Fallback: generate a simple GUID-like structure
     GUID fallbackGuid = {0};
-    DWORD tick = GetTickCount();
-    fallbackGuid.Data1 = tick;
-    fallbackGuid.Data2 = static_cast<WORD>(tick >> 16);
-    fallbackGuid.Data3 = static_cast<WORD>(tick & 0xFFFF);
-    
+    fallbackGuid.Data1 = GetTickCount();
+    fallbackGuid.Data2 = static_cast<unsigned short>(rand());
+    fallbackGuid.Data3 = static_cast<unsigned short>(rand());
+    for (int i = 0; i < 8; i++) {
+        fallbackGuid.Data4[i] = static_cast<unsigned char>(rand() % 256);
+    }
     return fallbackGuid;
 }
 

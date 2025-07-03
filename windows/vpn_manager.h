@@ -66,6 +66,8 @@ private:
     void updateStatus(const std::string& status);
     bool createConfigFile(const std::string& config, const std::string& username, const std::string& password);
     void cleanupTempFiles();
+    bool checkConnectionStatus();
+    bool checkTapAdapterStatus();
     
     // TAP adapter utilities
     std::string findTapAdapter();

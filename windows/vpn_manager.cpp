@@ -82,10 +82,11 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             }
         }
         
-        // Add management interface for monitoring
+        // Add management interface for monitoring  
         cmdStream << " --management 127.0.0.1 7505";
         cmdStream << " --management-query-passwords";
         cmdStream << " --management-hold";
+        cmdStream << " --management-client";
         
         // Add Windows-specific options
         cmdStream << " --verb 3";
@@ -321,43 +322,73 @@ bool VPNManager::isTapDriverInstalled() {
 }
 
 std::string VPNManager::getBundledOpenVPNPath() {
-    // Look for bundled OpenVPN executable in app directory
+    // Look for bundled OpenVPN executable in multiple possible locations
     std::string appDir = getAppDirectory();
+    
     std::vector<std::string> possiblePaths = {
+        // Flutter build output locations
+        appDir + "\\data\\flutter_assets\\windows\\bin\\openvpn.exe",
+        appDir + "\\data\\flutter_assets\\bin\\openvpn.exe",
+        // Direct bundle locations
         appDir + "\\bin\\openvpn.exe",
         appDir + "\\openvpn\\openvpn.exe",
-        appDir + "\\openvpn.exe"
+        appDir + "\\openvpn.exe",
+        // Plugin asset locations  
+        appDir + "\\..\\..\\..\\windows\\runner\\bin\\openvpn.exe",
+        // Development locations
+        ".\\bin\\openvpn.exe",
+        ".\\openvpn.exe"
     };
     
     for (const auto& path : possiblePaths) {
         if (PathFileExistsA(path.c_str())) {
+            std::cout << "Found OpenVPN executable at: " << path << std::endl;
             return path;
         }
     }
     
+    std::cerr << "OpenVPN executable not found in any expected location" << std::endl;
+    std::cerr << "Searched in app directory: " << appDir << std::endl;
     return "";
 }
 
 std::string VPNManager::findBundledExecutable(const std::string& filename) {
     std::string appDir = getAppDirectory();
+    
     std::vector<std::string> possiblePaths = {
+        // Flutter build output locations
+        appDir + "\\data\\flutter_assets\\windows\\bin\\" + filename,
+        appDir + "\\data\\flutter_assets\\bin\\" + filename,
+        appDir + "\\data\\flutter_assets\\drivers\\" + filename,
+        // Direct bundle locations
         appDir + "\\bin\\" + filename,
         appDir + "\\drivers\\" + filename,
-        appDir + "\\" + filename
+        appDir + "\\" + filename,
+        // Plugin asset locations
+        appDir + "\\..\\..\\..\\windows\\runner\\bin\\" + filename,
+        appDir + "\\..\\..\\..\\windows\\runner\\drivers\\" + filename,
+        // Development locations
+        ".\\bin\\" + filename,
+        ".\\drivers\\" + filename,
+        ".\\" + filename
     };
     
     for (const auto& path : possiblePaths) {
         if (PathFileExistsA(path.c_str())) {
+            std::cout << "Found " << filename << " at: " << path << std::endl;
             return path;
         }
     }
     
+    std::cout << "Warning: " << filename << " not found in any expected location" << std::endl;
     return "";
 }
 
 void VPNManager::monitorConnection() {
     int connectionAttempts = 0;
-    const int maxConnectionAttempts = 300;
+    const int maxConnectionAttempts = 300; // 30 seconds
+    int connectedStableCount = 0;
+    const int requiredStableCount = 10; // 1 second of stable connection
     
     while (shouldMonitor && hProcess) {
         DWORD exitCode;
@@ -366,33 +397,103 @@ void VPNManager::monitorConnection() {
                 if (isConnecting) {
                     connectionAttempts++;
                     
-                    // Check for successful connection via TAP adapter status
-                    if (connectionAttempts > 50) {
-                        isConnecting = false;
-                        isConnected = true;
-                        updateStatus("connected");
+                    // Check if OpenVPN process is running and stable
+                    if (connectionAttempts > 50) { // Give 5 seconds for process to start
+                        // Try to detect actual connection by checking for network adapter changes
+                        // or by reading OpenVPN log output (simplified check here)
+                        bool connectionDetected = checkConnectionStatus();
+                        
+                        if (connectionDetected) {
+                            connectedStableCount++;
+                            if (connectedStableCount >= requiredStableCount) {
+                                isConnecting = false;
+                                isConnected = true;
+                                updateStatus("connected");
+                                std::cout << "VPN connection established successfully" << std::endl;
+                            }
+                        } else {
+                            connectedStableCount = 0; // Reset counter if connection not stable
+                        }
+                    }
+                    
+                    if (connectionAttempts > maxConnectionAttempts) {
+                        updateStatus("error");
+                        std::cerr << "VPN connection timeout" << std::endl;
+                        break;
+                    }
+                } else if (isConnected) {
+                    // Continuously monitor active connection
+                    if (!checkConnectionStatus()) {
+                        // Connection lost
+                        isConnected = false;
+                        updateStatus("disconnected");
+                        std::cout << "VPN connection lost" << std::endl;
+                        break;
                     }
                 }
             } else {
+                // Process exited
                 isConnected = false;
                 isConnecting = false;
                 updateStatus("disconnected");
+                std::cout << "OpenVPN process exited with code: " << exitCode << std::endl;
                 break;
             }
         } else {
+            // Error getting process status
             isConnected = false;
             isConnecting = false;
             updateStatus("error");
+            std::cerr << "Error monitoring OpenVPN process" << std::endl;
             break;
         }
         
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+bool VPNManager::checkConnectionStatus() {
+    // Simple heuristic: check if we have a VPN adapter with an IP address
+    // This is a basic implementation - in production you might want to:
+    // 1. Parse OpenVPN management interface
+    // 2. Check for specific network routes
+    // 3. Ping VPN gateway
+    
+    if (currentDriver == DriverType::WINTUN) {
+        // For WinTun, check if adapter has IP assignment
+        return wintunManager && !wintunManager->getAdapterName().empty();
+    } else if (currentDriver == DriverType::TAP_WINDOWS) {
+        // For TAP, check if adapter is up and has IP
+        return !tapAdapterName.empty() && checkTapAdapterStatus();
+    }
+    
+    return false;
+}
+
+bool VPNManager::checkTapAdapterStatus() {
+    if (tapAdapterName.empty()) return false;
+    
+    // Check if TAP adapter has an IP address assigned
+    ULONG bufferSize = 0;
+    GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, NULL, &bufferSize);
+    
+    if (bufferSize > 0) {
+        std::vector<char> buffer(bufferSize);
+        PIP_ADAPTER_ADDRESSES adapters = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
         
-        if (isConnecting && connectionAttempts > maxConnectionAttempts) {
-            updateStatus("error");
-            break;
+        if (GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, adapters, &bufferSize) == NO_ERROR) {
+            for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL; adapter = adapter->Next) {
+                if (adapter->AdapterName && 
+                    std::string(adapter->AdapterName) == tapAdapterName &&
+                    adapter->OperStatus == IfOperStatusUp &&
+                    adapter->FirstUnicastAddress != NULL) {
+                    return true; // Adapter is up and has IP address
+                }
+            }
         }
     }
+    
+    return false;
 }
 
 void VPNManager::updateStatus(const std::string& status) {

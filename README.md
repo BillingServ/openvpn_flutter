@@ -160,14 +160,15 @@ Future<void> disconnectVPN() async {
 ### Windows Setup
 
 1. **Bundle Required Files**:
-   - Include OpenVPN executable with WinTun support
+   - Include OpenVPN executable with WinTun support in `windows/bundle/bin/`
    - Include `wintun.dll` for high-performance connections  
-   - Include TAP-Windows drivers as fallback
-   - See [Bundle Structure Guide](windows/BUNDLE_STRUCTURE.md) for details
+   - Include `libcrypto_3_x64.dll` and `libssl_3_x64.dll` (OpenSSL libraries)
+   - Optionally include TAP-Windows drivers in `windows/bundle/drivers/` as fallback
+   - See [Windows Setup Guide](windows/WINDOWS_SETUP_GUIDE.md) for detailed instructions
 
 2. **Driver Selection**:
-   - **WinTun**: Preferred driver (4x faster, MIT license)
-   - **TAP-Windows**: Automatic fallback for compatibility
+   - **WinTun**: Preferred driver (4x faster, MIT license, no installation required)
+   - **TAP-Windows**: Automatic fallback for compatibility (requires installation)
    - Plugin automatically selects best available driver
 
 3. **Example Windows Usage**:
@@ -175,10 +176,17 @@ Future<void> disconnectVPN() async {
 // Windows automatically uses WinTun (preferred) or TAP-Windows (fallback)
 await vpn.initialize(); // Sets up optimal driver automatically
 
-// Check which driver is being used
-// (Optional: for debugging/logging purposes)
+// Connect using your OpenVPN configuration
 await vpn.connect(openVpnConfig, "Windows VPN");
+
+// The plugin handles driver selection and configuration automatically
 ```
+
+**Important Notes for Windows:**
+- Ensure bundled files are present in your Flutter app's directory structure
+- WinTun requires no installation and provides better performance
+- TAP-Windows fallback requires administrator privileges for installation
+- Check the Windows Setup Guide for troubleshooting common issues
 
 ### macOS Setup
 

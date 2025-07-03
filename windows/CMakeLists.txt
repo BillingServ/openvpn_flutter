@@ -47,8 +47,21 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
+# Define the bundle directory for OpenVPN files
+# In plugin context, use the application's directory
+if(NOT DEFINED INSTALL_BUNDLE_LIB_DIR)
+    set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
+endif()
+
 # Copy bundled OpenVPN files to output directory
 set(OPENVPN_BUNDLE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bundle")
+
+# Ensure the bin directory exists in the target
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+
+# Copy files to build directory for development/testing
+file(COPY "${OPENVPN_BUNDLE_DIR}/bin/" 
+     DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/bin/")
 
 # Install OpenVPN executable and DLLs to the binary directory
 install(FILES 
@@ -57,7 +70,15 @@ install(FILES
     "${OPENVPN_BUNDLE_DIR}/bin/libcrypto_3_x64.dll"
     "${OPENVPN_BUNDLE_DIR}/bin/libssl_3_x64.dll"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}/bin"
+    OPTIONAL  # Don't fail if files are missing
 )
+
+# Install TAP driver files if they exist
+if(EXISTS "${OPENVPN_BUNDLE_DIR}/drivers/tap-windows/")
+    install(DIRECTORY "${OPENVPN_BUNDLE_DIR}/drivers/"
+            DESTINATION "${INSTALL_BUNDLE_LIB_DIR}/drivers"
+            OPTIONAL)
+endif()
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
