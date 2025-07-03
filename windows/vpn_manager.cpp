@@ -103,26 +103,24 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         cmdStream << " --dhcp-option DNS 8.8.4.4";
         
         std::string cmdLine = cmdStream.str();
+        std::cout << "OpenVPN command line: " << cmdLine << std::endl;
         
-        STARTUPINFOA si;
-        ZeroMemory(&si, sizeof(si));
-        si.cb = sizeof(si);
-        si.dwFlags = STARTF_USESHOWWINDOW;
-        si.wShowWindow = SW_HIDE;
+        // Start OpenVPN process with elevated privileges
+        SHELLEXECUTEINFOA sei = { 0 };
+        sei.cbSize = sizeof(sei);
+        sei.lpVerb = "runas";  // Request elevation
+        sei.lpFile = openVPNPath.c_str();
+        sei.lpParameters = cmdLine.substr(cmdLine.find(' ') + 1).c_str(); // Remove executable path from parameters
+        sei.nShow = SW_HIDE;
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
         
-        // Start OpenVPN process
-        BOOL success = CreateProcessA(
-            NULL,
-            const_cast<char*>(cmdLine.c_str()),
-            NULL,
-            NULL,
-            FALSE,
-            CREATE_NEW_CONSOLE,
-            NULL,
-            NULL,
-            &si,
-            &processInfo
-        );
+        BOOL success = ShellExecuteExA(&sei);
+        
+        if (success && sei.hProcess) {
+            hProcess = sei.hProcess;
+            // Initialize processInfo for compatibility
+            ZeroMemory(&processInfo, sizeof(processInfo));
+            processInfo.hProcess = sei.hProcess;
         
         if (success) {
             hProcess = processInfo.hProcess;
