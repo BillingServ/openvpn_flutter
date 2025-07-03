@@ -123,6 +123,14 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             
             isConnecting = true;
             connectionStartTime = std::chrono::system_clock::now();
+            
+            // Reset speed tracking
+            lastBytesIn = 0;
+            lastBytesOut = 0;
+            lastStatsTime = std::chrono::system_clock::time_point{};
+            currentSpeedIn = 0.0;
+            currentSpeedOut = 0.0;
+            
             updateStatus("connecting");
             
             // Start monitoring thread
@@ -184,6 +192,13 @@ std::string VPNManager::getConnectionStats() {
         // Get real network statistics from the VPN adapter
         auto [bytesIn, bytesOut] = getRealNetworkStats();
         
+        // Calculate speeds
+        updateSpeedCalculations(bytesIn, bytesOut, now);
+        
+        // Convert bytes per second to Mbps
+        double speedInMbps = (currentSpeedIn * 8.0) / (1024.0 * 1024.0);
+        double speedOutMbps = (currentSpeedOut * 8.0) / (1024.0 * 1024.0);
+        
         std::ostringstream oss;
         oss << "{\"connected_on\":\"";
         
@@ -197,7 +212,11 @@ std::string VPNManager::getConnectionStats() {
             << ",\"byte_in\":\"" << bytesIn << "\""
             << ",\"byte_out\":\"" << bytesOut << "\""
             << ",\"packets_in\":\"" << bytesIn << "\""
-            << ",\"packets_out\":\"" << bytesOut << "\"}";
+            << ",\"packets_out\":\"" << bytesOut << "\""
+            << ",\"speed_in_mbps\":\"" << std::fixed << std::setprecision(2) << speedInMbps << "\""
+            << ",\"speed_out_mbps\":\"" << std::fixed << std::setprecision(2) << speedOutMbps << "\""
+            << ",\"speed_in_bps\":\"" << static_cast<uint64_t>(currentSpeedIn) << "\""
+            << ",\"speed_out_bps\":\"" << static_cast<uint64_t>(currentSpeedOut) << "\"}";
         
         return oss.str();
     }
@@ -763,6 +782,48 @@ std::pair<uint64_t, uint64_t> VPNManager::getRealNetworkStats() {
     }
     
     return std::make_pair(bytesIn, bytesOut);
+}
+
+void VPNManager::updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, const std::chrono::system_clock::time_point& now) {
+    // Initialize on first call
+    if (lastStatsTime.time_since_epoch().count() == 0) {
+        lastBytesIn = bytesIn;
+        lastBytesOut = bytesOut;
+        lastStatsTime = now;
+        currentSpeedIn = 0.0;
+        currentSpeedOut = 0.0;
+        return;
+    }
+    
+    // Calculate time difference
+    auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatsTime);
+    double timeDiffSeconds = timeDiff.count() / 1000.0;
+    
+    // Only calculate if enough time has passed (at least 500ms for accuracy)
+    if (timeDiffSeconds >= 0.5) {
+        // Calculate byte differences
+        uint64_t byteInDiff = bytesIn - lastBytesIn;
+        uint64_t byteOutDiff = bytesOut - lastBytesOut;
+        
+        // Calculate speeds (bytes per second)
+        currentSpeedIn = byteInDiff / timeDiffSeconds;
+        currentSpeedOut = byteOutDiff / timeDiffSeconds;
+        
+        // Smooth the speeds with exponential moving average to reduce jitter
+        static double smoothedSpeedIn = 0.0;
+        static double smoothedSpeedOut = 0.0;
+        
+        smoothedSpeedIn = (smoothedSpeedIn * 0.7) + (currentSpeedIn * 0.3);
+        smoothedSpeedOut = (smoothedSpeedOut * 0.7) + (currentSpeedOut * 0.3);
+        
+        currentSpeedIn = smoothedSpeedIn;
+        currentSpeedOut = smoothedSpeedOut;
+        
+        // Update tracking variables
+        lastBytesIn = bytesIn;
+        lastBytesOut = bytesOut;
+        lastStatsTime = now;
+    }
 }
 
 } // namespace openvpn_flutter 

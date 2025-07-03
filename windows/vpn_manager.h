@@ -51,6 +51,13 @@ private:
     // Connection tracking
     std::chrono::system_clock::time_point connectionStartTime;
     
+    // Speed calculation tracking
+    uint64_t lastBytesIn = 0;
+    uint64_t lastBytesOut = 0;
+    std::chrono::system_clock::time_point lastStatsTime;
+    double currentSpeedIn = 0.0;  // bytes per second
+    double currentSpeedOut = 0.0; // bytes per second
+    
 public:
     VPNManager();
     ~VPNManager();
@@ -98,6 +105,7 @@ private:
     
     // Network statistics
     std::pair<uint64_t, uint64_t> getRealNetworkStats();
+    void updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, const std::chrono::system_clock::time_point& now);
 };
 
 } // namespace openvpn_flutter 
