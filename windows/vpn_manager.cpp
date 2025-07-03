@@ -243,18 +243,23 @@ bool VPNManager::initializeWinTun() {
 bool VPNManager::initializeTapDriver() {
     // Check if TAP driver is installed
     tapDriverInstalled = isTapDriverInstalled();
+    std::cout << "TAP driver installed: " << (tapDriverInstalled ? "Yes" : "No") << std::endl;
     
     if (tapDriverInstalled) {
         // Find existing TAP adapter
         tapAdapterName = findTapAdapter();
+        std::cout << "TAP adapter found: " << (tapAdapterName.empty() ? "None" : tapAdapterName) << std::endl;
+        
         if (tapAdapterName.empty()) {
             // Try to create one
+            std::cout << "Attempting to create TAP adapter..." << std::endl;
             return createTapAdapter();
         }
         return true;
     }
     
     // Try to install TAP driver
+    std::cout << "Attempting to install TAP driver..." << std::endl;
     return installTapDriver();
 }
 
@@ -550,16 +555,47 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
             return false;
         }
         
-        configFile << config;
+        // Process the configuration to replace device directives based on current driver
+        std::string modifiedConfig = config;
         
-        // Configure device type based on current driver
+        if (currentDriver == DriverType::TAP_WINDOWS) {
+            // Replace 'dev tun' with 'dev tap' for TAP-Windows compatibility
+            size_t pos = modifiedConfig.find("dev tun");
+            if (pos != std::string::npos) {
+                modifiedConfig.replace(pos, 7, "dev tap"); // Replace "dev tun" with "dev tap"
+            }
+            
+            // Remove any dev-type tun directives
+            pos = 0;
+            while ((pos = modifiedConfig.find("dev-type tun", pos)) != std::string::npos) {
+                size_t endPos = modifiedConfig.find('\n', pos);
+                if (endPos == std::string::npos) endPos = modifiedConfig.length();
+                modifiedConfig.erase(pos, endPos - pos + 1);
+            }
+            
+            // Remove any windows-driver wintun directives
+            pos = 0;
+            while ((pos = modifiedConfig.find("windows-driver wintun", pos)) != std::string::npos) {
+                size_t endPos = modifiedConfig.find('\n', pos);
+                if (endPos == std::string::npos) endPos = modifiedConfig.length();
+                modifiedConfig.erase(pos, endPos - pos + 1);
+            }
+        }
+        
+        configFile << modifiedConfig;
+        
+        // Add driver-specific configuration
         if (currentDriver == DriverType::WINTUN) {
-            configFile << "\ndev tun";
-            configFile << "\ndev-type tun";
             configFile << "\nwindows-driver wintun";
+            std::cout << "Added WinTun configuration to OpenVPN config" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
-            configFile << "\ndev tap";
             configFile << "\ndev-type tap";
+            if (!tapAdapterName.empty()) {
+                configFile << "\ndev-node \"" << tapAdapterName << "\"";
+                std::cout << "Added TAP adapter configuration: " << tapAdapterName << std::endl;
+            } else {
+                std::cout << "Warning: TAP adapter name is empty, using default" << std::endl;
+            }
         }
         
         if (!username.empty() && !password.empty()) {
