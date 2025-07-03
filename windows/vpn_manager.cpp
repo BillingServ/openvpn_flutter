@@ -4,16 +4,20 @@
 #include <chrono>
 #include <iostream>
 #include <vector>
+#include <iomanip>
 #include <tlhelp32.h>
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <winreg.h>
 #include <iphlpapi.h>
+#include <ws2ipdef.h>
+#include <ws2tcpip.h>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 namespace openvpn_flutter {
 
