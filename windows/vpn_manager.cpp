@@ -76,21 +76,7 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         std::ostringstream cmdStream;
         cmdStream << "\"" << openVPNPath << "\" --config \"" << currentConfigPath << "\"";
         
-        // Configure driver-specific options
-        if (currentDriver == DriverType::WINTUN) {
-            // Configure for WinTun
-            cmdStream << " --windows-driver wintun";
-            if (!wintunManager->getAdapterName().empty()) {
-                cmdStream << " --dev-node \"" << wintunManager->getAdapterName() << "\"";
-            }
-        } else if (currentDriver == DriverType::TAP_WINDOWS) {
-            // Configure for TAP-Windows
-            if (!tapAdapterName.empty()) {
-                cmdStream << " --dev-node \"" << tapAdapterName << "\"";
-            }
-        }
-        
-        // Add Windows-specific options
+        // Add minimal options
         cmdStream << " --verb 3";
         
         std::string cmdLine = cmdStream.str();
@@ -557,10 +543,11 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
             return false;
         }
         
-        // Process the configuration to replace device directives based on current driver
+        // Use the configuration as-is without modifications
+        // Let OpenVPN handle driver selection automatically
         std::string modifiedConfig = config;
         
-        // Remove deprecated client-cert-not-required option and replace with modern equivalent
+        // Remove deprecated client-cert-not-required option if present
         size_t pos = 0;
         while ((pos = modifiedConfig.find("client-cert-not-required", pos)) != std::string::npos) {
             size_t endPos = modifiedConfig.find('\n', pos);
@@ -568,47 +555,10 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
             modifiedConfig.erase(pos, endPos - pos + 1);
         }
         
-        if (currentDriver == DriverType::TAP_WINDOWS) {
-            // Replace 'dev tun' with 'dev tap' for TAP-Windows compatibility
-            pos = modifiedConfig.find("dev tun");
-            if (pos != std::string::npos) {
-                modifiedConfig.replace(pos, 7, "dev tap"); // Replace "dev tun" with "dev tap"
-            }
-            
-            // Remove any dev-type tun directives
-            pos = 0;
-            while ((pos = modifiedConfig.find("dev-type tun", pos)) != std::string::npos) {
-                size_t endPos = modifiedConfig.find('\n', pos);
-                if (endPos == std::string::npos) endPos = modifiedConfig.length();
-                modifiedConfig.erase(pos, endPos - pos + 1);
-            }
-            
-            // Remove any windows-driver wintun directives
-            pos = 0;
-            while ((pos = modifiedConfig.find("windows-driver wintun", pos)) != std::string::npos) {
-                size_t endPos = modifiedConfig.find('\n', pos);
-                if (endPos == std::string::npos) endPos = modifiedConfig.length();
-                modifiedConfig.erase(pos, endPos - pos + 1);
-            }
-        }
-        
         configFile << modifiedConfig;
         
-        std::cout << "Modified config (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
-        
-        // Add driver-specific configuration
-        if (currentDriver == DriverType::WINTUN) {
-            configFile << "\nwindows-driver wintun";
-            std::cout << "Added WinTun configuration to OpenVPN config" << std::endl;
-        } else if (currentDriver == DriverType::TAP_WINDOWS) {
-            configFile << "\ndev-type tap";
-            if (!tapAdapterName.empty()) {
-                configFile << "\ndev-node \"" << tapAdapterName << "\"";
-                std::cout << "Added TAP adapter configuration: " << tapAdapterName << std::endl;
-            } else {
-                std::cout << "Warning: TAP adapter name is empty, using default" << std::endl;
-            }
-        }
+        std::cout << "Using original config without driver modifications" << std::endl;
+        std::cout << "Config preview (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
         
         if (!username.empty() && !password.empty()) {
             std::string authPath = appDir + "\\openvpn_flutter_auth.txt";
