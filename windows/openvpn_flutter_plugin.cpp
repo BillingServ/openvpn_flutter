@@ -23,6 +23,17 @@ namespace openvpn_flutter {
 // Global VPN manager instance
 static std::unique_ptr<VPNManager> vpnManager = std::make_unique<VPNManager>();
 
+// Timer for processing status updates
+static UINT_PTR statusUpdateTimer = 0;
+static OpenVPNFlutterPlugin* pluginInstance = nullptr;
+
+// Timer callback to process status updates from main thread
+static void CALLBACK StatusUpdateTimerProc(HWND hwnd, UINT message, UINT_PTR idTimer, DWORD dwTime) {
+    if (vpnManager) {
+        vpnManager->processPendingStatusUpdates();
+    }
+}
+
 // Static method to register with the registrar
 void OpenVPNFlutterPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows *registrar) {
@@ -37,6 +48,7 @@ void OpenVPNFlutterPlugin::RegisterWithRegistrar(
           &flutter::StandardMethodCodec::GetInstance());
 
   auto plugin = std::make_unique<OpenVPNFlutterPlugin>(registrar);
+  pluginInstance = plugin.get();
 
   channel->SetMethodCallHandler(
       [plugin_pointer = plugin.get()](const auto &call, auto result) {
@@ -51,12 +63,27 @@ void OpenVPNFlutterPlugin::RegisterWithRegistrar(
           -> std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>> {
         plugin_pointer->event_sink_ = std::move(events);
         vpnManager->setEventSink(plugin_pointer->event_sink_.get());
+        
+        // Start timer to process status updates every 100ms
+        if (statusUpdateTimer == 0) {
+          statusUpdateTimer = SetTimer(NULL, 0, 100, StatusUpdateTimerProc);
+          std::cout << "Started status update timer" << std::endl;
+        }
+        
         return nullptr;
       },
       [plugin_pointer = plugin.get()](const flutter::EncodableValue* arguments)
           -> std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>> {
         plugin_pointer->event_sink_.reset();
         vpnManager->setEventSink(nullptr);
+        
+        // Stop timer when event sink is removed
+        if (statusUpdateTimer != 0) {
+          KillTimer(NULL, statusUpdateTimer);
+          statusUpdateTimer = 0;
+          std::cout << "Stopped status update timer" << std::endl;
+        }
+        
         return nullptr;
       });
 
@@ -68,7 +95,16 @@ void OpenVPNFlutterPlugin::RegisterWithRegistrar(
 OpenVPNFlutterPlugin::OpenVPNFlutterPlugin(flutter::PluginRegistrarWindows *registrar)
     : registrar_(registrar) {}
 
-OpenVPNFlutterPlugin::~OpenVPNFlutterPlugin() {}
+OpenVPNFlutterPlugin::~OpenVPNFlutterPlugin() {
+  // Clean up timer if plugin is destroyed
+  if (statusUpdateTimer != 0) {
+    KillTimer(NULL, statusUpdateTimer);
+    statusUpdateTimer = 0;
+  }
+  if (pluginInstance == this) {
+    pluginInstance = nullptr;
+  }
+}
 
 void OpenVPNFlutterPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,

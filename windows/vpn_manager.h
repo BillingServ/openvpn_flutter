@@ -6,6 +6,9 @@
 #include <atomic>
 #include <thread>
 #include <flutter/event_channel.h>
+#include <flutter/encodable_value.h>
+#include <mutex>
+#include <queue>
 #include "wintun_manager.h"
 
 namespace openvpn_flutter {
@@ -24,7 +27,7 @@ private:
     std::string currentConfigPath;
     std::string currentStatus = "disconnected";
     std::thread statusMonitorThread;
-    std::atomic<bool> shouldMonitor{false};
+    std::atomic<bool> shouldMonitor{true};
     flutter::EventSink<flutter::EncodableValue>* eventSink = nullptr;
     
     // Driver management
@@ -38,6 +41,10 @@ private:
     // TAP adapter management (fallback)
     std::string tapAdapterName;
     bool tapDriverInstalled = false;
+    
+    // Thread-safe status updates
+    std::mutex statusMutex;
+    std::queue<std::string> pendingStatusUpdates;
     
 public:
     VPNManager();
@@ -59,11 +66,15 @@ public:
     DriverType getCurrentDriver() const;
     void setPreferredDriver(DriverType type, bool allowFallback = true);
     
+    // Process pending status updates (call from main thread)
+    void processPendingStatusUpdates();
+    
 private:
     std::string getBundledOpenVPNPath();
     std::string findBundledExecutable(const std::string& filename);
     void monitorConnection();
     void updateStatus(const std::string& status);
+    void updateStatusThreadSafe(const std::string& status);
     bool createConfigFile(const std::string& config, const std::string& username, const std::string& password);
     void cleanupTempFiles();
     bool checkConnectionStatus();

@@ -408,7 +408,7 @@ void VPNManager::monitorConnection() {
                             if (connectedStableCount >= requiredStableCount) {
                                 isConnecting = false;
                                 isConnected = true;
-                                updateStatus("connected");
+                                updateStatusThreadSafe("connected");
                                 std::cout << "VPN connection established successfully" << std::endl;
                             }
                         } else {
@@ -417,7 +417,7 @@ void VPNManager::monitorConnection() {
                     }
                     
                     if (connectionAttempts > maxConnectionAttempts) {
-                        updateStatus("error");
+                        updateStatusThreadSafe("error");
                         std::cerr << "VPN connection timeout" << std::endl;
                         break;
                     }
@@ -426,7 +426,7 @@ void VPNManager::monitorConnection() {
                     if (!checkConnectionStatus()) {
                         // Connection lost
                         isConnected = false;
-                        updateStatus("disconnected");
+                        updateStatusThreadSafe("disconnected");
                         std::cout << "VPN connection lost" << std::endl;
                         break;
                     }
@@ -435,7 +435,7 @@ void VPNManager::monitorConnection() {
                 // Process exited
                 isConnected = false;
                 isConnecting = false;
-                updateStatus("disconnected");
+                updateStatusThreadSafe("disconnected");
                 std::cout << "OpenVPN process exited with code: " << exitCode << std::endl;
                 break;
             }
@@ -443,7 +443,7 @@ void VPNManager::monitorConnection() {
             // Error getting process status
             isConnected = false;
             isConnecting = false;
-            updateStatus("error");
+            updateStatusThreadSafe("error");
             std::cerr << "Error monitoring OpenVPN process" << std::endl;
             break;
         }
@@ -497,9 +497,33 @@ bool VPNManager::checkTapAdapterStatus() {
 }
 
 void VPNManager::updateStatus(const std::string& status) {
+    // This method should only be called from the main thread
     currentStatus = status;
     if (eventSink) {
         eventSink->Success(flutter::EncodableValue(status));
+    }
+}
+
+void VPNManager::updateStatusThreadSafe(const std::string& status) {
+    // Thread-safe method for background threads to queue status updates
+    std::lock_guard<std::mutex> lock(statusMutex);
+    pendingStatusUpdates.push(status);
+    std::cout << "Queued status update: " << status << " (from background thread)" << std::endl;
+}
+
+void VPNManager::processPendingStatusUpdates() {
+    // Process all pending status updates from the main thread
+    std::lock_guard<std::mutex> lock(statusMutex);
+    while (!pendingStatusUpdates.empty()) {
+        std::string status = pendingStatusUpdates.front();
+        pendingStatusUpdates.pop();
+        
+        // Update status using the main thread
+        currentStatus = status;
+        if (eventSink) {
+            eventSink->Success(flutter::EncodableValue(status));
+            std::cout << "Processed status update from main thread: " << status << std::endl;
+        }
     }
 }
 
