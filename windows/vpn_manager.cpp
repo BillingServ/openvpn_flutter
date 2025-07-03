@@ -4,6 +4,7 @@
 #include <winsock2.h>
 #include <ws2ipdef.h>
 #include <iphlpapi.h>
+#include <netioapi.h>
 
 #include "vpn_manager.h"
 #include <fstream>
@@ -120,6 +121,7 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             hProcess = processInfo.hProcess;
             
             isConnecting = true;
+            connectionStartTime = std::chrono::system_clock::now();
             updateStatus("connecting");
             
             // Start monitoring thread
@@ -168,9 +170,18 @@ std::string VPNManager::getStatus() {
 }
 
 std::string VPNManager::getConnectionStats() {
-    if (isConnected) {
+    if (isConnected || isConnecting) {
         auto now = std::chrono::system_clock::now();
         auto time_t = std::chrono::system_clock::to_time_t(now);
+        
+        // Calculate connection duration
+        auto connectionDuration = std::chrono::duration_cast<std::chrono::seconds>(now - connectionStartTime);
+        int hours = connectionDuration.count() / 3600;
+        int minutes = (connectionDuration.count() % 3600) / 60;
+        int seconds = connectionDuration.count() % 60;
+        
+        // Get real network statistics from the VPN adapter
+        auto [bytesIn, bytesOut] = getRealNetworkStats();
         
         std::ostringstream oss;
         oss << "{\"connected_on\":\"";
@@ -178,11 +189,18 @@ std::string VPNManager::getConnectionStats() {
         struct tm* timeinfo = std::localtime(&time_t);
         oss << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S");
         
-        oss << "\",\"duration\":\"00:05:30\",\"byte_in\":\"1048576\",\"byte_out\":\"524288\"}";
+        oss << "\",\"duration\":\"" 
+            << std::setfill('0') << std::setw(2) << hours << ":"
+            << std::setfill('0') << std::setw(2) << minutes << ":"
+            << std::setfill('0') << std::setw(2) << seconds << "\""
+            << ",\"byte_in\":\"" << bytesIn << "\""
+            << ",\"byte_out\":\"" << bytesOut << "\""
+            << ",\"packets_in\":\"" << bytesIn << "\""
+            << ",\"packets_out\":\"" << bytesOut << "\"}";
         
         return oss.str();
     }
-    return "{\"connected_on\":null,\"duration\":\"00:00:00\",\"byte_in\":\"0\",\"byte_out\":\"0\"}";
+    return "{\"connected_on\":null,\"duration\":\"00:00:00\",\"byte_in\":\"0\",\"byte_out\":\"0\",\"packets_in\":\"0\",\"packets_out\":\"0\"}";
 }
 
 bool VPNManager::initializeDriver() {
@@ -701,6 +719,51 @@ DriverType VPNManager::getCurrentDriver() const {
 void VPNManager::setPreferredDriver(DriverType type, bool allowFallback) {
     preferredDriver = type;
     allowFallbackToTAP = allowFallback;
+}
+
+std::pair<uint64_t, uint64_t> VPNManager::getRealNetworkStats() {
+    uint64_t bytesIn = 0;
+    uint64_t bytesOut = 0;
+    
+    // Get network adapter statistics
+    ULONG bufferSize = 0;
+    GetAdaptersAddresses(AF_UNSPEC, 0, NULL, NULL, &bufferSize);
+    
+    if (bufferSize > 0) {
+        std::vector<char> buffer(bufferSize);
+        PIP_ADAPTER_ADDRESSES adapters = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
+        
+        if (GetAdaptersAddresses(AF_UNSPEC, 0, NULL, adapters, &bufferSize) == NO_ERROR) {
+            for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL; adapter = adapter->Next) {
+                // Look for VPN-related adapters
+                if (adapter->Description && 
+                    (wcsstr(adapter->Description, L"TAP-Windows") != NULL ||
+                     wcsstr(adapter->Description, L"OpenVPN") != NULL ||
+                     wcsstr(adapter->Description, L"WinTun") != NULL ||
+                     wcsstr(adapter->Description, L"Wintun") != NULL ||
+                     wcsstr(adapter->Description, L"Data Channel Offload") != NULL)) {
+                    
+                    if (adapter->IfType == IF_TYPE_ETHERNET || adapter->IfType == IF_TYPE_TUNNEL) {
+                        // Get interface statistics using GetIfEntry2
+                        MIB_IF_ROW2 ifRow;
+                        ZeroMemory(&ifRow, sizeof(ifRow));
+                        ifRow.InterfaceIndex = adapter->IfIndex;
+                        
+                        if (GetIfEntry2(&ifRow) == NO_ERROR) {
+                            bytesIn += ifRow.InOctets;
+                            bytesOut += ifRow.OutOctets;
+                            
+                            std::wcout << L"Found VPN adapter: " << adapter->Description 
+                                      << L" - In: " << ifRow.InOctets 
+                                      << L" Out: " << ifRow.OutOctets << std::endl;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return std::make_pair(bytesIn, bytesOut);
 }
 
 } // namespace openvpn_flutter 

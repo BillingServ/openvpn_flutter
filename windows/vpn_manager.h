@@ -9,6 +9,8 @@
 #include <flutter/encodable_value.h>
 #include <mutex>
 #include <queue>
+#include <chrono>
+#include <iomanip>
 #include "wintun_manager.h"
 
 namespace openvpn_flutter {
@@ -45,6 +47,9 @@ private:
     // Thread-safe status updates
     std::mutex statusMutex;
     std::queue<std::string> pendingStatusUpdates;
+    
+    // Connection tracking
+    std::chrono::system_clock::time_point connectionStartTime;
     
 public:
     VPNManager();
@@ -90,6 +95,9 @@ private:
     bool runAsAdmin(const std::string& command, const std::string& params = "");
     bool isRunningAsAdmin();
     std::string getAppDirectory();
+    
+    // Network statistics
+    std::pair<uint64_t, uint64_t> getRealNetworkStats();
 };
 
 } // namespace openvpn_flutter 
