@@ -230,4 +230,12 @@ void OpenVPNFlutterPluginCApiRegisterWithRegistrar(
   openvpn_flutter::OpenVPNFlutterPlugin::RegisterWithRegistrar(
       flutter::PluginRegistrarManager::GetInstance()
           ->GetRegistrar<flutter::PluginRegistrarWindows>(registrar));
+}
+
+// This is the function Flutter expects based on the plugin name
+void OpenVPNFlutterPluginRegisterWithRegistrar(
+    FlutterDesktopPluginRegistrarRef registrar) {
+  openvpn_flutter::OpenVPNFlutterPlugin::RegisterWithRegistrar(
+      flutter::PluginRegistrarManager::GetInstance()
+          ->GetRegistrar<flutter::PluginRegistrarWindows>(registrar));
 } 
