@@ -101,11 +101,16 @@ class OpenVPN {
     onVpnStatusChanged?.call(VpnStatus.empty());
     initialized = true;
     _initializeListener();
-    return _channelControl.invokeMethod("initialize", {
-      "groupIdentifier": groupIdentifier,
-      "providerBundleIdentifier": providerBundleIdentifier,
-      "localizedDescription": localizedDescription,
-    }).then((value) {
+    
+    // Defer the heavy native initialization to avoid blocking startup
+    return Future.microtask(() async {
+      await _channelControl.invokeMethod("initialize", {
+        "groupIdentifier": groupIdentifier,
+        "providerBundleIdentifier": providerBundleIdentifier,
+        "localizedDescription": localizedDescription,
+      });
+      
+      // Get initial status in background
       Future.wait([
         status().then((value) => lastStatus?.call(value)),
         stage().then((value) {
