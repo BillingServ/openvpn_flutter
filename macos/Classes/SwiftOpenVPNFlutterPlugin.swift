@@ -108,6 +108,19 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
             case "disconnect":
                 print("🔧 macOS OpenVPN Plugin: Disconnect method called")
                 SwiftOpenVPNFlutterPlugin.utils.stopVPN()
+                
+                // Force a quick status check after disconnect
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
+                    print("🔧 macOS OpenVPN Plugin: Quick status check after disconnect: \(currentStatus ?? "nil")")
+                    
+                    // If still connected, force another disconnect attempt
+                    if currentStatus == "connected" {
+                        print("🔧 macOS OpenVPN Plugin: Still connected, forcing another disconnect attempt")
+                        SwiftOpenVPNFlutterPlugin.utils.stopVPN()
+                    }
+                }
+                
                 result(nil)
                 break;
             case "connect":
@@ -254,8 +267,18 @@ class VPNUtils {
                     // Additional logging for disconnect process
                     if status == .disconnected {
                         print("🔧 macOS OpenVPN Plugin: VPN fully disconnected")
+                        // Force immediate status update for disconnect
+                        if let stage = self?.stage {
+                            print("🔧 macOS OpenVPN Plugin: Forcing immediate disconnected status update")
+                            stage("disconnected")
+                        }
                     } else if status == .disconnecting {
                         print("🔧 macOS OpenVPN Plugin: VPN is disconnecting...")
+                        // Force immediate status update for disconnecting
+                        if let stage = self?.stage {
+                            print("🔧 macOS OpenVPN Plugin: Forcing immediate disconnecting status update")
+                            stage("disconnecting")
+                        }
                     }
                     
                     self?.onVpnStatusChanged(notification: status)
@@ -440,14 +463,20 @@ class VPNUtils {
     func stopVPN() {
         print("🔧 macOS OpenVPN Plugin: Stopping VPN tunnel...")
         
-        // Ensure we're on the main queue for UI updates
+        // Force immediate status update first
+        if let stage = self.stage {
+            print("🔧 macOS OpenVPN Plugin: Forcing immediate disconnecting status update")
+            stage("disconnecting")
+        }
+        
+        // Stop the tunnel on main queue
         DispatchQueue.main.async {
             self.providerManager.connection.stopVPNTunnel()
             print("🔧 macOS OpenVPN Plugin: VPN tunnel stop requested")
             
-            // Force a status update to ensure the UI gets notified
+            // Force another status update after stopping
             if let stage = self.stage {
-                print("🔧 macOS OpenVPN Plugin: Forcing disconnecting status update")
+                print("🔧 macOS OpenVPN Plugin: Forcing post-stop disconnecting status update")
                 stage("disconnecting")
             }
         }
