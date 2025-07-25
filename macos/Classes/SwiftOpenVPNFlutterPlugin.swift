@@ -206,8 +206,32 @@ class VPNUtils {
     
     func loadProviderManager(completion:@escaping (_ error : Error?) -> Void)  {
         print("🔧 macOS OpenVPN Plugin: Loading provider manager...")
+        print("🔧 macOS OpenVPN Plugin: Provider bundle identifier: \(self.providerBundleIdentifier ?? "nil")")
+        
+        // Check if the provider bundle is available
+        if let bundleId = self.providerBundleIdentifier {
+            let bundle = Bundle(identifier: bundleId)
+            if bundle != nil {
+                print("🔧 macOS OpenVPN Plugin: Provider bundle found: \(bundleId)")
+            } else {
+                print("🔧 macOS OpenVPN Plugin: WARNING - Provider bundle not found: \(bundleId)")
+                print("🔧 macOS OpenVPN Plugin: This may cause connection failures")
+            }
+        }
+        
         NETunnelProviderManager.loadAllFromPreferences { (managers, error)  in
             if error == nil {
+                print("🔧 macOS OpenVPN Plugin: Found \(managers?.count ?? 0) existing VPN configurations")
+                
+                // Check for existing configurations
+                if let existingManagers = managers, !existingManagers.isEmpty {
+                    for (index, manager) in existingManagers.enumerated() {
+                        print("🔧 macOS OpenVPN Plugin: Existing config \(index): \(manager.localizedDescription ?? "unnamed")")
+                        print("🔧 macOS OpenVPN Plugin:   - Enabled: \(manager.isEnabled)")
+                        print("🔧 macOS OpenVPN Plugin:   - Status: \(manager.connection.status.rawValue)")
+                    }
+                }
+                
                 self.providerManager = managers?.first ?? NETunnelProviderManager()
                 print("🔧 macOS OpenVPN Plugin: Provider manager loaded successfully")
                 
@@ -290,9 +314,29 @@ class VPNUtils {
     
     func currentStatus() -> String? {
         if self.providerManager != nil {
-            let status = onVpnStatusChangedString(notification: self.providerManager.connection.status)
-            print("🔧 macOS OpenVPN Plugin: Current status: \(status ?? "nil")")
-            return status
+            let status = self.providerManager.connection.status
+            let statusString = onVpnStatusChangedString(notification: status)
+            print("🔧 macOS OpenVPN Plugin: Current status: \(statusString ?? "nil") (raw: \(status.rawValue))")
+            
+            // Add more detailed status information
+            switch status {
+            case .invalid:
+                print("🔧 macOS OpenVPN Plugin: Status is invalid - VPN may not be properly configured")
+            case .disconnected:
+                print("🔧 macOS OpenVPN Plugin: VPN is disconnected")
+            case .connecting:
+                print("🔧 macOS OpenVPN Plugin: VPN is connecting...")
+            case .connected:
+                print("🔧 macOS OpenVPN Plugin: VPN is connected")
+            case .disconnecting:
+                print("🔧 macOS OpenVPN Plugin: VPN is disconnecting...")
+            case .reasserting:
+                print("🔧 macOS OpenVPN Plugin: VPN is reasserting...")
+            @unknown default:
+                print("🔧 macOS OpenVPN Plugin: Unknown VPN status: \(status.rawValue)")
+            }
+            
+            return statusString
         }
         return "disconnected"
     }
@@ -306,16 +350,22 @@ class VPNUtils {
         self.providerManager?.loadFromPreferences { error in
             if error == nil {
                 let tunnelProtocol = NETunnelProviderProtocol()
-                tunnelProtocol.serverAddress = "VPN Server"
+                tunnelProtocol.serverAddress = "" // Use empty string like iOS
                 tunnelProtocol.providerBundleIdentifier = self.providerBundleIdentifier
+                
+                // Use the same configuration approach as iOS
+                let nullData = "".data(using: .utf8)
                 tunnelProtocol.providerConfiguration = [
-                    "ovpn": configData ?? "",
-                    "username": username ?? "",
-                    "password": password ?? ""
+                    "config": configData?.data(using: .utf8) ?? nullData!,
+                    "groupIdentifier": self.groupIdentifier?.data(using: .utf8) ?? nullData!,
+                    "username": username?.data(using: .utf8) ?? nullData!,
+                    "password": password?.data(using: .utf8) ?? nullData!
                 ]
+                tunnelProtocol.disconnectOnSleep = false
                 
                 if let config = tunnelProtocol.providerConfiguration {
                     print("🔧 macOS OpenVPN Plugin: Provider configuration set with keys: \(Array(config.keys))")
+                    print("🔧 macOS OpenVPN Plugin: Config data length: \(configData?.count ?? 0)")
                 } else {
                     print("🔧 macOS OpenVPN Plugin: Provider configuration is nil")
                 }
@@ -362,9 +412,27 @@ class VPNUtils {
                                 print("🔧 macOS OpenVPN Plugin: VPN status observer set up successfully")
                                 
                                 print("🔧 macOS OpenVPN Plugin: Starting VPN tunnel...")
-                                try self.providerManager.connection.startVPNTunnel()
-                                print("🔧 macOS OpenVPN Plugin: VPN tunnel started successfully")
-                                completion(nil)
+                                print("🔧 macOS OpenVPN Plugin: Provider bundle ID: \(self.providerBundleIdentifier ?? "nil")")
+                                print("🔧 macOS OpenVPN Plugin: Server address: \(tunnelProtocol.serverAddress ?? "nil")")
+                                
+                                do {
+                                    // Use the same approach as iOS for starting the tunnel
+                                    if username != nil && password != nil {
+                                        let options: [String : NSObject] = [
+                                            "username": username! as NSString,
+                                            "password": password! as NSString
+                                        ]
+                                        try self.providerManager.connection.startVPNTunnel(options: options)
+                                    } else {
+                                        try self.providerManager.connection.startVPNTunnel()
+                                    }
+                                    print("🔧 macOS OpenVPN Plugin: VPN tunnel started successfully")
+                                    completion(nil)
+                                } catch {
+                                    print("🔧 macOS OpenVPN Plugin: Failed to start VPN tunnel: \(error)")
+                                    print("🔧 macOS OpenVPN Plugin: Error details: \(error.localizedDescription)")
+                                    completion(error)
+                                }
                             } catch let error {
                                 print("🔧 macOS OpenVPN Plugin: Failed to start VPN tunnel: \(error)")
                                 completion(error)
