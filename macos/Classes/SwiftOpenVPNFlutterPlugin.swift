@@ -109,33 +109,8 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 print("🔧 macOS OpenVPN Plugin: Disconnect method called")
                 SwiftOpenVPNFlutterPlugin.utils.stopVPN()
                 
-                // Force multiple aggressive status checks to speed up disconnection
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
-                    print("🔧 macOS OpenVPN Plugin: Quick status check after disconnect: \(currentStatus ?? "nil")")
-                    
-                    // If still connected, force another disconnect attempt
-                    if currentStatus == "connected" {
-                        print("🔧 macOS OpenVPN Plugin: Still connected, forcing another disconnect attempt")
-                        SwiftOpenVPNFlutterPlugin.utils.stopVPN()
-                    }
-                }
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
-                    if currentStatus == "connected" {
-                        print("🔧 macOS OpenVPN Plugin: Still connected after 0.5s, forcing disconnect")
-                        SwiftOpenVPNFlutterPlugin.utils.stopVPN()
-                    }
-                }
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
-                    if currentStatus == "connected" {
-                        print("🔧 macOS OpenVPN Plugin: Still connected after 1.0s, forcing final disconnect")
-                        SwiftOpenVPNFlutterPlugin.utils.stopVPN()
-                    }
-                }
+                // Note: Removed aggressive status checks to prevent UI confusion
+                // The Network Extension will handle disconnection properly
                 
                 result(nil)
                 break;
@@ -334,27 +309,10 @@ class VPNUtils {
         let statusString = onVpnStatusChangedString(notification: notification)
         print("🔧 macOS OpenVPN Plugin: Status string: \(statusString ?? "nil")")
         
-        // Force immediate status updates for disconnection events
-        if notification == .disconnected {
-            print("🔧 macOS OpenVPN Plugin: VPN fully disconnected")
-            // Force immediate status update for disconnect
-            for callback in stageCallbacks {
-                print("🔧 macOS OpenVPN Plugin: Forcing immediate disconnected status update")
-                callback("disconnected")
-            }
-        } else if notification == .disconnecting {
-            print("🔧 macOS OpenVPN Plugin: VPN is disconnecting...")
-            // Force immediate status update for disconnecting
-            for callback in stageCallbacks {
-                print("🔧 macOS OpenVPN Plugin: Forcing immediate disconnecting status update")
-                callback("disconnecting")
-            }
-        } else {
-            // Normal status update for other states
-            for callback in stageCallbacks {
-                print("🔧 macOS OpenVPN Plugin: Calling stage callback with: \(statusString ?? "nil")")
-                callback(statusString ?? "disconnected")
-            }
+        // Send status update only once per event
+        for callback in stageCallbacks {
+            print("🔧 macOS OpenVPN Plugin: Calling stage callback with: \(statusString ?? "nil")")
+            callback(statusString ?? "disconnected")
         }
         
         print("🔧 macOS OpenVPN Plugin: All stage callbacks called successfully")
@@ -513,24 +471,8 @@ class VPNUtils {
             stage("disconnecting")
         }
         
-        // Force multiple status checks to speed up disconnection detection
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            if let stage = self.stage {
-                stage("disconnecting")
-            }
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if let stage = self.stage {
-                stage("disconnecting")
-            }
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            if let stage = self.stage {
-                stage("disconnecting")
-            }
-        }
+        // Note: Removed aggressive status updates to prevent UI confusion
+        // The Network Extension will send the proper status events
     }
     
     func getTraffictStats() {
