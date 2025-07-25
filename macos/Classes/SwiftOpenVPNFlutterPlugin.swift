@@ -93,6 +93,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 SwiftOpenVPNFlutterPlugin.utils.loadProviderManager{(err:Error?) in
                     if err == nil{
                         print("🔧 macOS OpenVPN Plugin: Provider manager loaded successfully")
+                        
                         // Return current status immediately after initialization
                         let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
                         print("🔧 macOS OpenVPN Plugin: Initial status: \(currentStatus ?? "nil")")
@@ -241,11 +242,19 @@ class VPNUtils {
                     forName: .NEVPNStatusDidChange,
                     object: self.providerManager.connection,
                     queue: .main
-                ) { notification in
+                ) { [weak self] notification in
                     print("🔧 macOS OpenVPN Plugin: VPN status notification received!")
-                    let status = self.providerManager.connection.status
+                    let status = self?.providerManager.connection.status ?? .invalid
                     print("🔧 macOS OpenVPN Plugin: Current VPN status: \(status.rawValue)")
-                    self.onVpnStatusChanged(notification: status)
+                    
+                    // Additional logging for disconnect process
+                    if status == .disconnected {
+                        print("🔧 macOS OpenVPN Plugin: VPN fully disconnected")
+                    } else if status == .disconnecting {
+                        print("🔧 macOS OpenVPN Plugin: VPN is disconnecting...")
+                    }
+                    
+                    self?.onVpnStatusChanged(notification: status)
                 }
                 
                 print("🔧 macOS OpenVPN Plugin: VPN status observer set up successfully")
@@ -385,32 +394,6 @@ class VPNUtils {
                             }
                             
                             do {
-                                // Ensure VPN status observer is set up
-                                print("🔧 macOS OpenVPN Plugin: Ensuring VPN status observer is set up...")
-                                if self.vpnStageObserver != nil {
-                                    NotificationCenter.default.removeObserver(self.vpnStageObserver!,
-                                                                              name: NSNotification.Name.NEVPNStatusDidChange,
-                                                                              object: nil)
-                                }
-                                self.vpnStageObserver = NotificationCenter.default.addObserver(
-                                    forName: NSNotification.Name.NEVPNStatusDidChange,
-                                    object: nil,
-                                    queue: .main
-                                ) { [weak self] notification in
-                                    print("🔧 macOS OpenVPN Plugin: VPN status notification received during connection!")
-                                    print("🔧 macOS OpenVPN Plugin: Notification object: \(notification.object ?? "nil")")
-                                    if let nevpnconn = notification.object as? NEVPNConnection {
-                                        let status = nevpnconn.status
-                                        print("🔧 macOS OpenVPN Plugin: Connection status changed to: \(status.rawValue)")
-                                        print("🔧 macOS OpenVPN Plugin: About to call onVpnStatusChanged...")
-                                        self?.onVpnStatusChanged(notification: status)
-                                        print("🔧 macOS OpenVPN Plugin: onVpnStatusChanged called successfully")
-                                    } else {
-                                        print("🔧 macOS OpenVPN Plugin: Notification object is not NEVPNConnection")
-                                    }
-                                }
-                                print("🔧 macOS OpenVPN Plugin: VPN status observer set up successfully")
-                                
                                 print("🔧 macOS OpenVPN Plugin: Starting VPN tunnel...")
                                 print("🔧 macOS OpenVPN Plugin: Provider bundle ID: \(self.providerBundleIdentifier ?? "nil")")
                                 print("🔧 macOS OpenVPN Plugin: Server address: \(tunnelProtocol.serverAddress ?? "nil")")
@@ -452,8 +435,18 @@ class VPNUtils {
     
     func stopVPN() {
         print("🔧 macOS OpenVPN Plugin: Stopping VPN tunnel...")
-        providerManager.connection.stopVPNTunnel()
-        print("🔧 macOS OpenVPN Plugin: VPN tunnel stop requested")
+        
+        // Ensure we're on the main queue for UI updates
+        DispatchQueue.main.async {
+            self.providerManager.connection.stopVPNTunnel()
+            print("🔧 macOS OpenVPN Plugin: VPN tunnel stop requested")
+            
+            // Force a status update to ensure the UI gets notified
+            if let stage = self.stage {
+                print("🔧 macOS OpenVPN Plugin: Forcing disconnecting status update")
+                stage("disconnecting")
+            }
+        }
     }
     
     func getTraffictStats() {
