@@ -119,6 +119,8 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                                         details: nil));
                     return
                 }
+                
+
                 let config: String? = (call.arguments as? [String : Any])? ["config"] as? String
                 let username: String? = (call.arguments as? [String : Any])? ["username"] as? String
                 let password: String? = (call.arguments as? [String : Any])? ["password"] as? String
@@ -134,6 +136,8 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                                         details: "Config can't be nulled"))
                     return
                 }
+                
+
                 
                 print("🔧 macOS OpenVPN Plugin: Calling configureVPN...")
                 SwiftOpenVPNFlutterPlugin.utils.configureVPN(config: config, username: username, password: password, completion: {(success:Error?) -> Void in
@@ -209,16 +213,16 @@ class VPNUtils {
         print("🔧 macOS OpenVPN Plugin: Loading provider manager...")
         print("🔧 macOS OpenVPN Plugin: Provider bundle identifier: \(self.providerBundleIdentifier ?? "nil")")
         
-        // Check if the provider bundle is available
-        if let bundleId = self.providerBundleIdentifier {
-            let bundle = Bundle(identifier: bundleId)
-            if bundle != nil {
-                print("🔧 macOS OpenVPN Plugin: Provider bundle found: \(bundleId)")
-            } else {
-                print("🔧 macOS OpenVPN Plugin: WARNING - Provider bundle not found: \(bundleId)")
-                print("🔧 macOS OpenVPN Plugin: This may cause connection failures")
-            }
-        }
+                        // Check if the provider bundle is available
+                if let bundleId = self.providerBundleIdentifier {
+                    let bundle = Bundle(identifier: bundleId)
+                    if bundle != nil {
+                        print("🔧 macOS OpenVPN Plugin: Provider bundle found: \(bundleId)")
+                    } else {
+                        print("🔧 macOS OpenVPN Plugin: WARNING - Provider bundle not found: \(bundleId)")
+                        print("🔧 macOS OpenVPN Plugin: This may cause connection failures")
+                    }
+                }
         
         NETunnelProviderManager.loadAllFromPreferences { (managers, error)  in
             if error == nil {
