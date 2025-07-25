@@ -28,65 +28,114 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 result(UserDefaults.init(suiteName: SwiftOpenVPNFlutterPlugin.utils.groupIdentifier)?.string(forKey: "connectionUpdate"))
                 break;
             case "stage":
-                result(SwiftOpenVPNFlutterPlugin.utils.currentStatus())
+                print("🔧 macOS OpenVPN Plugin: Stage method called")
+                let status = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
+                print("🔧 macOS OpenVPN Plugin: Returning stage: \(status ?? "nil")")
+                result(status)
+                break;
+            case "checkStatus":
+                print("🔧 macOS OpenVPN Plugin: Check status method called")
+                let status = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
+                print("🔧 macOS OpenVPN Plugin: Check status result: \(status ?? "nil")")
+                result(status)
+                break;
+            case "forceStatusCheck":
+                print("🔧 macOS OpenVPN Plugin: Force status check method called")
+                // Force a status check and update
+                if let providerManager = SwiftOpenVPNFlutterPlugin.utils.providerManager {
+                    let status = providerManager.connection.status
+                    print("🔧 macOS OpenVPN Plugin: Forcing status update: \(status.rawValue)")
+                    SwiftOpenVPNFlutterPlugin.utils.onVpnStatusChanged(notification: status)
+                }
+                result("status_check_triggered")
                 break;
             case "initialize":
+                print("🔧 macOS OpenVPN Plugin: Initialize method called")
                 let providerBundleIdentifier: String? = (call.arguments as? [String: Any])?["providerBundleIdentifier"] as? String
                 let localizedDescription: String? = (call.arguments as? [String: Any])?["localizedDescription"] as? String
                 let groupIdentifier: String? = (call.arguments as? [String: Any])?["groupIdentifier"] as? String
+                
+                print("🔧 macOS OpenVPN Plugin: Group identifier: \(groupIdentifier ?? "nil")")
+                print("🔧 macOS OpenVPN Plugin: Provider bundle identifier: \(providerBundleIdentifier ?? "nil")")
+                print("🔧 macOS OpenVPN Plugin: Localized description: \(localizedDescription ?? "nil")")
                 if providerBundleIdentifier == nil  {
+                    print("🔧 macOS OpenVPN Plugin: providerBundleIdentifier is nil")
                     result(FlutterError(code: "-2",
                                         message: "providerBundleIdentifier content empty or null",
                                         details: nil));
                     return;
                 }
                 if localizedDescription == nil  {
+                    print("🔧 macOS OpenVPN Plugin: localizedDescription is nil")
                     result(FlutterError(code: "-3",
                                         message: "localizedDescription content empty or null",
                                         details: nil));
                     return;
                 }
                 if groupIdentifier == nil  {
+                    print("🔧 macOS OpenVPN Plugin: groupIdentifier is nil")
                     result(FlutterError(code: "-4",
                                         message: "groupIdentifier content empty or null",
                                         details: nil));
                     return;
                 }
+                print("🔧 macOS OpenVPN Plugin: Setting up VPN utils...")
                 SwiftOpenVPNFlutterPlugin.utils.groupIdentifier = groupIdentifier
                 SwiftOpenVPNFlutterPlugin.utils.localizedDescription = localizedDescription
                 SwiftOpenVPNFlutterPlugin.utils.providerBundleIdentifier = providerBundleIdentifier
+                
+                print("🔧 macOS OpenVPN Plugin: Loading provider manager...")
                 SwiftOpenVPNFlutterPlugin.utils.loadProviderManager{(err:Error?) in
                     if err == nil{
-                        result(SwiftOpenVPNFlutterPlugin.utils.currentStatus())
+                        print("🔧 macOS OpenVPN Plugin: Provider manager loaded successfully")
+                        // Return current status immediately after initialization
+                        let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
+                        print("🔧 macOS OpenVPN Plugin: Initial status: \(currentStatus ?? "nil")")
+                        result(currentStatus)
                     }else{
+                        print("🔧 macOS OpenVPN Plugin: Failed to load provider manager: \(err?.localizedDescription ?? "unknown error")")
                         result(FlutterError(code: "-4", message: err?.localizedDescription, details: err?.localizedDescription));
                     }
                 }
                 self.initialized = true
                 break;
             case "disconnect":
+                print("🔧 macOS OpenVPN Plugin: Disconnect method called")
                 SwiftOpenVPNFlutterPlugin.utils.stopVPN()
+                result(nil)
                 break;
             case "connect":
+                print("🔧 macOS OpenVPN Plugin: Connect method called")
                 if !self.initialized {
+                    print("🔧 macOS OpenVPN Plugin: VPN not initialized")
                     result(FlutterError(code: "-1",
                                         message: "VPNEngine need to be initialize",
                                         details: nil));
+                    return
                 }
                 let config: String? = (call.arguments as? [String : Any])? ["config"] as? String
                 let username: String? = (call.arguments as? [String : Any])? ["username"] as? String
                 let password: String? = (call.arguments as? [String : Any])? ["password"] as? String
+                
+                print("🔧 macOS OpenVPN Plugin: Config length: \(config?.count ?? 0)")
+                print("🔧 macOS OpenVPN Plugin: Username: \(username ?? "nil")")
+                print("🔧 macOS OpenVPN Plugin: Password provided: \(password != nil)")
+                
                 if config == nil{
+                    print("🔧 macOS OpenVPN Plugin: Config is nil")
                     result(FlutterError(code: "-2",
                                         message:"Config is empty or nulled",
                                         details: "Config can't be nulled"))
                     return
                 }
                 
+                print("🔧 macOS OpenVPN Plugin: Calling configureVPN...")
                 SwiftOpenVPNFlutterPlugin.utils.configureVPN(config: config, username: username, password: password, completion: {(success:Error?) -> Void in
                     if(success == nil){
+                        print("🔧 macOS OpenVPN Plugin: configureVPN completed successfully")
                         result(nil)
                     }else{
+                        print("🔧 macOS OpenVPN Plugin: configureVPN failed: \(success?.localizedDescription ?? "unknown error")")
                         result(FlutterError(code: "99",
                                             message: "permission denied",
                                             details: success?.localizedDescription))
@@ -94,8 +143,18 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 })
                 break;
             case "dispose":
+                print("🔧 macOS OpenVPN Plugin: Dispose method called")
+                // Clean up VPN status observer
+                if let observer = SwiftOpenVPNFlutterPlugin.utils.vpnStageObserver {
+                    print("🔧 macOS OpenVPN Plugin: Removing VPN status observer")
+                    NotificationCenter.default.removeObserver(observer)
+                    SwiftOpenVPNFlutterPlugin.utils.vpnStageObserver = nil
+                }
                 self.initialized = false
+                result(nil)
+                break;
             default:
+                result(FlutterMethodNotImplemented)
                 break;
             }
         })
@@ -104,12 +163,25 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
     
     class StageHandler: NSObject, FlutterStreamHandler {
         func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+            print("🔧 macOS OpenVPN Plugin: StageHandler onListen called")
+            SwiftOpenVPNFlutterPlugin.stage = events
             SwiftOpenVPNFlutterPlugin.utils.stage = events
+            print("🔧 macOS OpenVPN Plugin: Stage callback set successfully")
+            
+            // Immediately send current status if available
+            if let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus() {
+                print("🔧 macOS OpenVPN Plugin: Sending initial status: \(currentStatus)")
+                events(currentStatus)
+            }
+            
             return nil
         }
         
         func onCancel(withArguments arguments: Any?) -> FlutterError? {
+            print("🔧 macOS OpenVPN Plugin: StageHandler onCancel called")
+            SwiftOpenVPNFlutterPlugin.stage = nil
             SwiftOpenVPNFlutterPlugin.utils.stage = nil
+            print("🔧 macOS OpenVPN Plugin: Stage callback cleared")
             return nil
         }
     }
@@ -128,40 +200,65 @@ class VPNUtils {
     var vpnStageObserver : NSObjectProtocol?
     
     func loadProviderManager(completion:@escaping (_ error : Error?) -> Void)  {
+        print("🔧 macOS OpenVPN Plugin: Loading provider manager...")
         NETunnelProviderManager.loadAllFromPreferences { (managers, error)  in
             if error == nil {
                 self.providerManager = managers?.first ?? NETunnelProviderManager()
+                print("🔧 macOS OpenVPN Plugin: Provider manager loaded successfully")
+                
+                // Set up VPN status observer
+                print("🔧 macOS OpenVPN Plugin: Setting up VPN status observer...")
+                self.vpnStageObserver = NotificationCenter.default.addObserver(
+                    forName: .NEVPNStatusDidChange,
+                    object: self.providerManager.connection,
+                    queue: .main
+                ) { notification in
+                    print("🔧 macOS OpenVPN Plugin: VPN status notification received!")
+                    let status = self.providerManager.connection.status
+                    print("🔧 macOS OpenVPN Plugin: Current VPN status: \(status.rawValue)")
+                    self.onVpnStatusChanged(notification: status)
+                }
+                
+                print("🔧 macOS OpenVPN Plugin: VPN status observer set up successfully")
+                
+                // Check current status immediately
+                let currentStatus = self.providerManager.connection.status
+                print("🔧 macOS OpenVPN Plugin: Initial VPN status: \(currentStatus.rawValue)")
+                if currentStatus != .invalid {
+                    print("🔧 macOS OpenVPN Plugin: Calling onVpnStatusChanged with initial status")
+                    self.onVpnStatusChanged(notification: currentStatus)
+                }
+                
                 completion(nil)
             } else {
+                print("🔧 macOS OpenVPN Plugin: Error loading provider manager: \(error?.localizedDescription ?? "unknown error")")
                 completion(error)
             }
         }
     }
     
     func onVpnStatusChanged(notification : NEVPNStatus) {
-        switch notification {
-        case NEVPNStatus.connected:
-            stage?("connected")
-            break;
-        case NEVPNStatus.connecting:
-            stage?("connecting")
-            break;
-        case NEVPNStatus.disconnected:
-            stage?("disconnected")
-            break;
-        case NEVPNStatus.disconnecting:
-            stage?("disconnecting")
-            break;
-        case NEVPNStatus.invalid:
-            stage?("invalid")
-            break;
-        case NEVPNStatus.reasserting:
-            stage?("reasserting")
-            break;
-        default:
-            stage?("null")
-            break;
+        print("🔧 macOS OpenVPN Plugin: VPN status changed to: \(notification.rawValue)")
+        print("🔧 macOS OpenVPN Plugin: About to call stage callback with status")
+        print("🔧 macOS OpenVPN Plugin: Stage callback is nil: \(stage == nil)")
+        
+        // Try both stage callbacks (static and instance)
+        let stageCallbacks = [stage, SwiftOpenVPNFlutterPlugin.stage].compactMap { $0 }
+        
+        if stageCallbacks.isEmpty {
+            print("🔧 macOS OpenVPN Plugin: ERROR - No stage callbacks available!")
+            return
         }
+        
+        let statusString = onVpnStatusChangedString(notification: notification)
+        print("🔧 macOS OpenVPN Plugin: Status string: \(statusString ?? "nil")")
+        
+        for callback in stageCallbacks {
+            print("🔧 macOS OpenVPN Plugin: Calling stage callback with: \(statusString ?? "nil")")
+            callback(statusString ?? "disconnected")
+        }
+        
+        print("🔧 macOS OpenVPN Plugin: All stage callbacks called successfully")
     }
     
     func onVpnStatusChangedString(notification : NEVPNStatus?) -> String?{
@@ -182,20 +279,25 @@ class VPNUtils {
         case NEVPNStatus.reasserting:
             return "reasserting";
         default:
-            return "";
+            return "disconnected";
         }
     }
     
     func currentStatus() -> String? {
         if self.providerManager != nil {
-            return onVpnStatusChangedString(notification: self.providerManager.connection.status)}
-        else{
-            return "disconnected"
+            let status = onVpnStatusChangedString(notification: self.providerManager.connection.status)
+            print("🔧 macOS OpenVPN Plugin: Current status: \(status ?? "nil")")
+            return status
         }
+        return "disconnected"
     }
     
     func configureVPN(config: String?, username : String?,password : String?,completion:@escaping (_ error : Error?) -> Void) {
         let configData = config
+        print("🔧 macOS OpenVPN Plugin: Configuring VPN with config length: \(configData?.count ?? 0)")
+        print("🔧 macOS OpenVPN Plugin: Username: \(username ?? "nil")")
+        print("🔧 macOS OpenVPN Plugin: Password: \(password != nil ? "provided" : "nil")")
+        
         self.providerManager?.loadFromPreferences { error in
             if error == nil {
                 let tunnelProtocol = NETunnelProviderProtocol()
@@ -206,31 +308,75 @@ class VPNUtils {
                     "username": username ?? "",
                     "password": password ?? ""
                 ]
+                
+                print("🔧 macOS OpenVPN Plugin: Provider configuration set with keys: \(tunnelProtocol.providerConfiguration?.keys ?? [])")
                 self.providerManager.protocolConfiguration = tunnelProtocol
                 self.providerManager.localizedDescription = self.localizedDescription
                 self.providerManager.isEnabled = true
                 self.providerManager.saveToPreferences(completionHandler: { (error) in
                     if error == nil {
+                        print("🔧 macOS OpenVPN Plugin: Preferences saved successfully")
                         self.providerManager.loadFromPreferences(completionHandler: { (error) in
+                            if let error = error {
+                                print("🔧 macOS OpenVPN Plugin: Failed to load preferences after save: \(error.localizedDescription)")
+                                completion(error)
+                                return
+                            } else {
+                                print("🔧 macOS OpenVPN Plugin: Preferences loaded successfully after save")
+                            }
+                            
                             do {
+                                // Ensure VPN status observer is set up
+                                print("🔧 macOS OpenVPN Plugin: Ensuring VPN status observer is set up...")
+                                if self.vpnStageObserver != nil {
+                                    NotificationCenter.default.removeObserver(self.vpnStageObserver!,
+                                                                              name: NSNotification.Name.NEVPNStatusDidChange,
+                                                                              object: nil)
+                                }
+                                self.vpnStageObserver = NotificationCenter.default.addObserver(
+                                    forName: NSNotification.Name.NEVPNStatusDidChange,
+                                    object: nil,
+                                    queue: .main
+                                ) { [weak self] notification in
+                                    print("🔧 macOS OpenVPN Plugin: VPN status notification received during connection!")
+                                    print("🔧 macOS OpenVPN Plugin: Notification object: \(notification.object ?? "nil")")
+                                    if let nevpnconn = notification.object as? NEVPNConnection {
+                                        let status = nevpnconn.status
+                                        print("🔧 macOS OpenVPN Plugin: Connection status changed to: \(status.rawValue)")
+                                        print("🔧 macOS OpenVPN Plugin: About to call onVpnStatusChanged...")
+                                        self?.onVpnStatusChanged(notification: status)
+                                        print("🔧 macOS OpenVPN Plugin: onVpnStatusChanged called successfully")
+                                    } else {
+                                        print("🔧 macOS OpenVPN Plugin: Notification object is not NEVPNConnection")
+                                    }
+                                }
+                                print("🔧 macOS OpenVPN Plugin: VPN status observer set up successfully")
+                                
+                                print("🔧 macOS OpenVPN Plugin: Starting VPN tunnel...")
                                 try self.providerManager.connection.startVPNTunnel()
+                                print("🔧 macOS OpenVPN Plugin: VPN tunnel started successfully")
                                 completion(nil)
                             } catch let error {
+                                print("🔧 macOS OpenVPN Plugin: Failed to start VPN tunnel: \(error)")
                                 completion(error)
                             }
                         })
                     } else {
+                        print("🔧 macOS OpenVPN Plugin: Failed to save preferences: \(error?.localizedDescription ?? "unknown error")")
                         completion(error)
                     }
                 })
             } else {
+                print("🔧 macOS OpenVPN Plugin: Failed to load preferences: \(error?.localizedDescription ?? "unknown error")")
                 completion(error)
             }
         }
     }
     
     func stopVPN() {
+        print("🔧 macOS OpenVPN Plugin: Stopping VPN tunnel...")
         providerManager.connection.stopVPNTunnel()
+        print("🔧 macOS OpenVPN Plugin: VPN tunnel stop requested")
     }
     
     func getTraffictStats() {

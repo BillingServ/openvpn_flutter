@@ -143,15 +143,24 @@ class OpenVPN {
     // Remove automatic addition of cert options - config should be complete
     _tempDateTime = DateTime.now();
 
+    print('🔧 OpenVPN Plugin: About to call _channelControl.invokeMethod("connect")');
+    print('🔧 OpenVPN Plugin: Config length: ${config.length}');
+    print('🔧 OpenVPN Plugin: Name: $name');
+    print('🔧 OpenVPN Plugin: Username: $username');
+    print('🔧 OpenVPN Plugin: Password provided: ${password != null}');
+
     try {
-      return _channelControl.invokeMethod("connect", {
+      final result = _channelControl.invokeMethod("connect", {
         "config": config,
         "name": name,
         "username": username,
         "password": password,
         "bypass_packages": bypassPackages ?? []
       });
+      print('🔧 OpenVPN Plugin: _channelControl.invokeMethod("connect") called successfully');
+      return result;
     } on PlatformException catch (e) {
+      print('❌ OpenVPN Plugin: Method channel call failed: ${e.message}');
       throw ArgumentError(e.message);
     }
   }
@@ -249,6 +258,18 @@ class OpenVPN {
     });
   }
 
+  ///Force status check (useful for debugging on macOS)
+  Future<void> forceStatusCheck() async {
+    if (Platform.isMacOS) {
+      try {
+        await _channelControl.invokeMethod("forceStatusCheck");
+        print('🔧 OpenVPN Plugin: Force status check triggered');
+      } catch (e) {
+        print('❌ OpenVPN Plugin: Force status check failed: $e');
+      }
+    }
+  }
+
   ///Request android permission (Return true if already granted)
   Future<bool> requestPermissionAndroid() async {
     return _channelControl
@@ -310,35 +331,54 @@ class OpenVPN {
 
   ///Initialize listener, called when you start connection and stoped while
   void _initializeListener() {
+    print('🔧 OpenVPN Plugin: Initializing listener...');
     _vpnStageSnapshot().listen((event) {
+      print('🔧 OpenVPN Plugin: Received stage event: $event');
       var vpnStage = _strToStage(event);
+      print('🔧 OpenVPN Plugin: Converted to VPNStage: $vpnStage');
+      
       if (vpnStage != _lastStage) {
+        print('🔧 OpenVPN Plugin: Stage changed from $_lastStage to $vpnStage');
         onVpnStageChanged?.call(vpnStage, event);
         _lastStage = vpnStage;
       }
+      
       if (vpnStage != VPNStage.disconnected) {
         if (Platform.isAndroid) {
           _createTimer();
         } else if ((Platform.isIOS || Platform.isMacOS) && vpnStage == VPNStage.connected) {
+          print('🔧 OpenVPN Plugin: Creating timer for iOS/macOS connected state');
           _createTimer();
         } else if ((Platform.isWindows || Platform.isLinux) && vpnStage == VPNStage.connected) {
           _createTimer();
         }
       } else {
+        print('🔧 OpenVPN Plugin: Disconnected state, cancelling timer');
         _vpnStatusTimer?.cancel();
       }
+    }, onError: (error) {
+      print('❌ OpenVPN Plugin: Error in stage listener: $error');
     });
   }
 
   ///Create timer to invoke status
   void _createTimer() {
     if (_vpnStatusTimer != null) {
+      print('🔧 OpenVPN Plugin: Cancelling existing timer');
       _vpnStatusTimer!.cancel();
       _vpnStatusTimer = null;
     }
+    
+    print('🔧 OpenVPN Plugin: Creating new status timer');
     _vpnStatusTimer ??=
         Timer.periodic(const Duration(milliseconds: 250), (timer) async {
-      onVpnStatusChanged?.call(await status());
+      try {
+        final vpnStatus = await status();
+        print('🔧 OpenVPN Plugin: Timer status update: ${vpnStatus.toJson()}');
+        onVpnStatusChanged?.call(vpnStatus);
+      } catch (e) {
+        print('❌ OpenVPN Plugin: Error getting status in timer: $e');
+      }
     });
   }
 }
