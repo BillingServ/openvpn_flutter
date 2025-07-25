@@ -12,16 +12,21 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
     private var initialized : Bool = false
     
     public static func register(with registrar: FlutterPluginRegistrar) {
+        print("🔧 macOS OpenVPN Plugin: Plugin registration started")
         let instance = SwiftOpenVPNFlutterPlugin()
         instance.onRegister(registrar)
+        print("🔧 macOS OpenVPN Plugin: Plugin registration completed")
     }
     
     public func onRegister(_ registrar: FlutterPluginRegistrar){
+        print("🔧 macOS OpenVPN Plugin: Setting up method channels...")
         let vpnControlM = FlutterMethodChannel(name: SwiftOpenVPNFlutterPlugin.METHOD_CHANNEL_VPN_CONTROL, binaryMessenger: registrar.messenger)
         let vpnStageE = FlutterEventChannel(name: SwiftOpenVPNFlutterPlugin.EVENT_CHANNEL_VPN_STAGE, binaryMessenger: registrar.messenger)
+        print("🔧 macOS OpenVPN Plugin: Method channels created successfully")
         
         vpnStageE.setStreamHandler(StageHandler())
         vpnControlM.setMethodCallHandler({(call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
+            print("🔧 macOS OpenVPN Plugin: Method called: \(call.method)")
             switch call.method {
             case "status":
                 SwiftOpenVPNFlutterPlugin.utils.getTraffictStats()
@@ -309,7 +314,11 @@ class VPNUtils {
                     "password": password ?? ""
                 ]
                 
-                print("🔧 macOS OpenVPN Plugin: Provider configuration set with keys: \(Array(tunnelProtocol.providerConfiguration?.keys ?? []))")
+                if let config = tunnelProtocol.providerConfiguration {
+                    print("🔧 macOS OpenVPN Plugin: Provider configuration set with keys: \(Array(config.keys))")
+                } else {
+                    print("🔧 macOS OpenVPN Plugin: Provider configuration is nil")
+                }
                 self.providerManager.protocolConfiguration = tunnelProtocol
                 self.providerManager.localizedDescription = self.localizedDescription
                 self.providerManager.isEnabled = true
