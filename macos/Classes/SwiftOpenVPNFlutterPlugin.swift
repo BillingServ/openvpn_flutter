@@ -309,7 +309,7 @@ class VPNUtils {
                     "password": password ?? ""
                 ]
                 
-                print("🔧 macOS OpenVPN Plugin: Provider configuration set with keys: \(tunnelProtocol.providerConfiguration?.keys ?? [])")
+                print("🔧 macOS OpenVPN Plugin: Provider configuration set with keys: \(Array(tunnelProtocol.providerConfiguration?.keys ?? []))")
                 self.providerManager.protocolConfiguration = tunnelProtocol
                 self.providerManager.localizedDescription = self.localizedDescription
                 self.providerManager.isEnabled = true
