@@ -303,17 +303,37 @@ class VPNUtils {
     
     func getTraffictStats() {
         if let sharedDefaults = UserDefaults.init(suiteName: groupIdentifier) {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-            
-            let connectedDate = sharedDefaults.object(forKey: "connected_date") as? Date ?? Date()
-            let bytes_in = sharedDefaults.object(forKey: "bytes_in") as? String ?? "0"
-            let bytes_out = sharedDefaults.object(forKey: "bytes_out") as? String ?? "0"
-            let packets_in = sharedDefaults.object(forKey: "packets_in") as? String ?? "0"
-            let packets_out = sharedDefaults.object(forKey: "packets_out") as? String ?? "0"
-            
-            let connectionUpdate = "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)"
-            sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+            // Try to get comprehensive statistics first
+            if let vpnStats = sharedDefaults.dictionary(forKey: "vpn_statistics") {
+                // Use the comprehensive statistics with speed data
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                
+                let connectedDate = vpnStats["connected_on"] as? String ?? formatter.string(from: Date())
+                let bytes_in = vpnStats["byte_in"] as? String ?? "0"
+                let bytes_out = vpnStats["byte_out"] as? String ?? "0"
+                let packets_in = vpnStats["packets_in"] as? String ?? "0"
+                let packets_out = vpnStats["packets_out"] as? String ?? "0"
+                let speed_in = vpnStats["speed_in_mbps"] as? Double ?? 0.0
+                let speed_out = vpnStats["speed_out_mbps"] as? Double ?? 0.0
+                
+                // Create enhanced connection update with speed data
+                let connectionUpdate = "\(connectedDate)_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_\(String(format: "%.2f", speed_in))_\(String(format: "%.2f", speed_out))"
+                sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+            } else {
+                // Fallback to original method
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                
+                let connectedDate = sharedDefaults.object(forKey: "connected_date") as? Date ?? Date()
+                let bytes_in = sharedDefaults.object(forKey: "bytes_in") as? String ?? "0"
+                let bytes_out = sharedDefaults.object(forKey: "bytes_out") as? String ?? "0"
+                let packets_in = sharedDefaults.object(forKey: "packets_in") as? String ?? "0"
+                let packets_out = sharedDefaults.object(forKey: "packets_out") as? String ?? "0"
+                
+                let connectionUpdate = "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.0_0.0"
+                sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+            }
         }
     }
 } 

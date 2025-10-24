@@ -198,14 +198,31 @@ class OpenVPN {
             var splitted = value.split("_");
             var connectedOn = DateTime.tryParse(splitted[0]);
             if (connectedOn == null) return VpnStatus.empty();
-            return VpnStatus(
-              connectedOn: connectedOn,
-              duration: _duration(DateTime.now().difference(connectedOn).abs()),
-              packetsIn: splitted[1],
-              packetsOut: splitted[2],
-              byteIn: splitted[3],
-              byteOut: splitted[4],
-            );
+            
+            // Handle both old format (5 parts) and new format (7 parts with speeds)
+            if (splitted.length >= 7) {
+              // New format with speed data
+              return VpnStatus(
+                connectedOn: connectedOn,
+                duration: _duration(DateTime.now().difference(connectedOn).abs()),
+                packetsIn: splitted[1],
+                packetsOut: splitted[2],
+                byteIn: splitted[3],
+                byteOut: splitted[4],
+                speedIn: splitted[5], // Download speed in Mbps
+                speedOut: splitted[6], // Upload speed in Mbps
+              );
+            } else {
+              // Old format without speed data
+              return VpnStatus(
+                connectedOn: connectedOn,
+                duration: _duration(DateTime.now().difference(connectedOn).abs()),
+                packetsIn: splitted[1],
+                packetsOut: splitted[2],
+                byteIn: splitted[3],
+                byteOut: splitted[4],
+              );
+            }
           } else if (Platform.isAndroid) {
             var data = jsonDecode(value);
             var connectedOn =
@@ -371,7 +388,7 @@ class OpenVPN {
     
     print('🔧 OpenVPN Plugin: Creating new status timer');
     _vpnStatusTimer ??=
-        Timer.periodic(const Duration(milliseconds: 250), (timer) async {
+        Timer.periodic(const Duration(seconds: 1), (timer) async {
       try {
         final vpnStatus = await status();
         print('🔧 OpenVPN Plugin: Timer status update: ${vpnStatus.toJson()}');
