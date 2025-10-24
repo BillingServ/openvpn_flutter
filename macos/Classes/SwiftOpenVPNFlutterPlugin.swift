@@ -310,16 +310,60 @@ class VPNUtils {
                 formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
                 
                 let connectedDate = vpnStats["connected_on"] as? String ?? formatter.string(from: Date())
-                let bytes_in = vpnStats["byte_in"] as? String ?? "0"
-                let bytes_out = vpnStats["byte_out"] as? String ?? "0"
-                let packets_in = vpnStats["packets_in"] as? String ?? "0"
-                let packets_out = vpnStats["packets_out"] as? String ?? "0"
+                
+                // Handle different data types for byte counts
+                let bytes_in: String
+                let bytes_out: String
+                let packets_in: String
+                let packets_out: String
+                
+                if let bytesInUInt64 = vpnStats["byte_in"] as? UInt64 {
+                    bytes_in = String(bytesInUInt64)
+                } else if let bytesInString = vpnStats["byte_in"] as? String {
+                    bytes_in = bytesInString
+                } else {
+                    bytes_in = "0"
+                }
+                
+                if let bytesOutUInt64 = vpnStats["byte_out"] as? UInt64 {
+                    bytes_out = String(bytesOutUInt64)
+                } else if let bytesOutString = vpnStats["byte_out"] as? String {
+                    bytes_out = bytesOutString
+                } else {
+                    bytes_out = "0"
+                }
+                
+                if let packetsInUInt64 = vpnStats["packets_in"] as? UInt64 {
+                    packets_in = String(packetsInUInt64)
+                } else if let packetsInString = vpnStats["packets_in"] as? String {
+                    packets_in = packetsInString
+                } else {
+                    packets_in = "0"
+                }
+                
+                if let packetsOutUInt64 = vpnStats["packets_out"] as? UInt64 {
+                    packets_out = String(packetsOutUInt64)
+                } else if let packetsOutString = vpnStats["packets_out"] as? String {
+                    packets_out = packetsOutString
+                } else {
+                    packets_out = "0"
+                }
+                
+                // Handle speed data (should be Double from VPN extension)
                 let speed_in = vpnStats["speed_in_mbps"] as? Double ?? 0.0
                 let speed_out = vpnStats["speed_out_mbps"] as? Double ?? 0.0
                 
                 // Create enhanced connection update with speed data
                 let connectionUpdate = "\(connectedDate)_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_\(String(format: "%.2f", speed_in))_\(String(format: "%.2f", speed_out))"
                 sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+                
+                // Debug logging
+                print("🔧 Flutter Plugin: Reading VPN stats:")
+                print("   Connected: \(connectedDate)")
+                print("   Bytes: In=\(bytes_in), Out=\(bytes_out)")
+                print("   Packets: In=\(packets_in), Out=\(packets_out)")
+                print("   Speeds: DL=\(String(format: "%.2f", speed_in)) Mbps, UL=\(String(format: "%.2f", speed_out)) Mbps")
+                print("   ConnectionUpdate: \(connectionUpdate)")
             } else {
                 // Fallback to original method
                 let formatter = DateFormatter()
@@ -333,6 +377,8 @@ class VPNUtils {
                 
                 let connectionUpdate = "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.0_0.0"
                 sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+                
+                print("🔧 Flutter Plugin: Using fallback stats (no vpn_statistics found)")
             }
         }
     }
