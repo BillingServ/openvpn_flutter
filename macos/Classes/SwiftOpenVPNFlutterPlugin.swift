@@ -166,7 +166,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
         CFNotificationCenterRemoveObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             Unmanaged.passUnretained(self).toOpaque(),
-            statsNotificationName,
+            CFNotificationName(statsNotificationName),
             nil
         )
     }
