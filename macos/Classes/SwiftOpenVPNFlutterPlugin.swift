@@ -3,13 +3,14 @@ import FlutterMacOS
 import NetworkExtension
 
 public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
-    private static var utils : VPNUtils! = VPNUtils()
+    private let utils = VPNUtils()
     
     private static var EVENT_CHANNEL_VPN_STAGE = "id.laskarmedia.openvpn_flutter/vpnstage"
     private static var METHOD_CHANNEL_VPN_CONTROL = "id.laskarmedia.openvpn_flutter/vpncontrol"
      
     public static var stage: FlutterEventSink?
     private var initialized : Bool = false
+    private let statsNotificationName = "com.baseserv.gcmvpn.statsUpdated" as CFString
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = SwiftOpenVPNFlutterPlugin()
@@ -21,25 +22,38 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
         let vpnStageE = FlutterEventChannel(name: SwiftOpenVPNFlutterPlugin.EVENT_CHANNEL_VPN_STAGE, binaryMessenger: registrar.messenger)
         
         vpnStageE.setStreamHandler(StageHandler())
+        
+        // Set up Darwin notification observer for stats updates
+        startDarwinStatsObserver()
+        
+        // Set up the stage for VPNUtils
+        self.utils.stage = SwiftOpenVPNFlutterPlugin.stage
+        
         vpnControlM.setMethodCallHandler({(call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
             switch call.method {
             case "status":
-                SwiftOpenVPNFlutterPlugin.utils.getTraffictStats()
-                result(UserDefaults.init(suiteName: SwiftOpenVPNFlutterPlugin.utils.groupIdentifier)?.string(forKey: "connectionUpdate"))
+                guard self.utils.groupIdentifier != nil else {
+                    result(nil) // Return nil if not initialized
+                    return
+                }
+                self.utils.getTrafficStats()
+                let s = UserDefaults(suiteName: self.utils.groupIdentifier!)?
+                         .string(forKey: "connectionUpdate")
+                result(s)
                 break;
             case "stage":
-                let status = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
+                let status = self.utils.currentStatus()
                 result(status)
                 break;
             case "checkStatus":
-                let status = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
+                let status = self.utils.currentStatus()
                 result(status)
                 break;
             case "forceStatusCheck":
                 // Force a status check and update
-                if let providerManager = SwiftOpenVPNFlutterPlugin.utils.providerManager {
+                if let providerManager = self.utils.providerManager {
                     let status = providerManager.connection.status
-                    SwiftOpenVPNFlutterPlugin.utils.onVpnStatusChanged(notification: status)
+                    self.utils.onVpnStatusChanged(notification: status)
                 }
                 result("status_check_triggered")
                 break;
@@ -67,14 +81,14 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                     return;
                 }
                 
-                SwiftOpenVPNFlutterPlugin.utils.groupIdentifier = groupIdentifier
-                SwiftOpenVPNFlutterPlugin.utils.localizedDescription = localizedDescription
-                SwiftOpenVPNFlutterPlugin.utils.providerBundleIdentifier = providerBundleIdentifier
+                self.utils.groupIdentifier = groupIdentifier
+                self.utils.localizedDescription = localizedDescription
+                self.utils.providerBundleIdentifier = providerBundleIdentifier
                 
-                SwiftOpenVPNFlutterPlugin.utils.loadProviderManager{(err:Error?) in
+                self.utils.loadProviderManager{(err:Error?) in
                     if err == nil{
                         // Return current status immediately after initialization
-                        let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus()
+                        let currentStatus = self.utils.currentStatus()
                         result(currentStatus)
                     }else{
                         result(FlutterError(code: "-4", message: err?.localizedDescription, details: err?.localizedDescription));
@@ -83,7 +97,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 self.initialized = true
                 break;
             case "disconnect":
-                SwiftOpenVPNFlutterPlugin.utils.stopVPN()
+                self.utils.stopVPN()
                 result(nil)
                 break;
             case "connect":
@@ -105,7 +119,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                     return
                 }
                 
-                SwiftOpenVPNFlutterPlugin.utils.configureVPN(config: config, username: username, password: password, completion: {(success:Error?) -> Void in
+                self.utils.configureVPN(config: config, username: username, password: password, completion: {(success:Error?) -> Void in
                     if(success == nil){
                         result(nil)
                     }else{
@@ -117,9 +131,9 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 break;
             case "dispose":
                 // Clean up VPN status observer
-                if let observer = SwiftOpenVPNFlutterPlugin.utils.vpnStageObserver {
+                if let observer = self.utils.vpnStageObserver {
                     NotificationCenter.default.removeObserver(observer)
-                    SwiftOpenVPNFlutterPlugin.utils.vpnStageObserver = nil
+                    self.utils.vpnStageObserver = nil
                 }
                 self.initialized = false
                 result(nil)
@@ -131,23 +145,45 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
         })
     }
     
+    private func startDarwinStatsObserver() {
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, name, _, _ in
+                let this = Unmanaged<SwiftOpenVPNFlutterPlugin>
+                    .fromOpaque(observer!).takeUnretainedValue()
+                this.utils.getTrafficStats()
+            },
+            statsNotificationName,
+            nil,
+            .deliverImmediately
+        )
+        print("📡 OpenVPN Plugin: Set up Darwin notification listener for VPN stats")
+    }
+    
+    deinit {
+        // Clean up Darwin notification observer
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            statsNotificationName,
+            nil
+        )
+    }
+    
     
     class StageHandler: NSObject, FlutterStreamHandler {
         func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
             SwiftOpenVPNFlutterPlugin.stage = events
-            SwiftOpenVPNFlutterPlugin.utils.stage = events
             
             // Immediately send current status if available
-            if let currentStatus = SwiftOpenVPNFlutterPlugin.utils.currentStatus() {
-                events(currentStatus)
-            }
+            events("disconnected") // Default status
             
             return nil
         }
         
         func onCancel(withArguments arguments: Any?) -> FlutterError? {
             SwiftOpenVPNFlutterPlugin.stage = nil
-            SwiftOpenVPNFlutterPlugin.utils.stage = nil
             return nil
         }
     }
@@ -170,12 +206,12 @@ class VPNUtils {
             if error == nil {
                 self.providerManager = managers?.first ?? NETunnelProviderManager()
                 
-                // Set up VPN status observer
+                // Set up VPN status observer (don't filter by object to avoid missing updates)
                 self.vpnStageObserver = NotificationCenter.default.addObserver(
                     forName: .NEVPNStatusDidChange,
-                    object: self.providerManager.connection,
+                    object: nil,  // Receive regardless of connection instance
                     queue: .main
-                ) { [weak self] notification in
+                ) { [weak self] _ in
                     let status = self?.providerManager.connection.status ?? .invalid
                     self?.onVpnStatusChanged(notification: status)
                 }
@@ -249,13 +285,12 @@ class VPNUtils {
                 tunnelProtocol.serverAddress = "" // Use empty string like iOS
                 tunnelProtocol.providerBundleIdentifier = self.providerBundleIdentifier
                 
-                // Use the same configuration approach as iOS
-                let nullData = "".data(using: .utf8)
+                // Use String keys to match the extension expectations
                 tunnelProtocol.providerConfiguration = [
-                    "config": configData?.data(using: .utf8) ?? nullData!,
-                    "groupIdentifier": self.groupIdentifier?.data(using: .utf8) ?? nullData!,
-                    "username": username?.data(using: .utf8) ?? nullData!,
-                    "password": password?.data(using: .utf8) ?? nullData!
+                    "vpn_config": configData ?? "",
+                    "groupIdentifier": self.groupIdentifier ?? "",
+                    "username": username ?? "",
+                    "password": password ?? ""
                 ]
                 tunnelProtocol.disconnectOnSleep = false
                 
@@ -299,12 +334,24 @@ class VPNUtils {
     func stopVPN() {
         // Stop the tunnel immediately
         self.providerManager.connection.stopVPNTunnel()
+        
+        // Clear connection update to avoid showing stale stats
+        if let group = groupIdentifier,
+           let sharedDefaults = UserDefaults(suiteName: group) {
+            sharedDefaults.removeObject(forKey: "connectionUpdate")
+            sharedDefaults.synchronize()
+        }
     }
     
-    func getTraffictStats() {
-        if let sharedDefaults = UserDefaults.init(suiteName: groupIdentifier) {
-            // Try to get comprehensive statistics first
-            if let vpnStats = sharedDefaults.dictionary(forKey: "vpn_statistics") {
+    func getTrafficStats() {
+        guard let group = groupIdentifier,
+              let sharedDefaults = UserDefaults(suiteName: group) else { return }
+        
+        // Pull freshest values written by the packet tunnel
+        sharedDefaults.synchronize()
+        
+        // Try to get comprehensive statistics first
+        if let vpnStats = sharedDefaults.dictionary(forKey: "vpn_statistics") {
                 // Use the comprehensive statistics with speed data
                 let formatter = DateFormatter()
                 formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
@@ -357,6 +404,9 @@ class VPNUtils {
                 let connectionUpdate = "\(connectedDate)_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_\(String(format: "%.2f", speed_in))_\(String(format: "%.2f", speed_out))"
                 sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
                 
+                // Push back to disk so Flutter can read immediately
+                sharedDefaults.synchronize()
+                
                 // Debug logging
                 print("🔧 Flutter Plugin: Reading VPN stats:")
                 print("   Connected: \(connectedDate)")
@@ -377,6 +427,9 @@ class VPNUtils {
                 
                 let connectionUpdate = "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.0_0.0"
                 sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+                
+                // Push back to disk so Flutter can read immediately
+                sharedDefaults.synchronize()
                 
                 print("🔧 Flutter Plugin: Using fallback stats (no vpn_statistics found)")
             }
