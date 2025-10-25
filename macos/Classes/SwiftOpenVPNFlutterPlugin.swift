@@ -10,7 +10,8 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
      
     public static var stage: FlutterEventSink?
     private var initialized : Bool = false
-    private let statsNotificationName = "com.baseserv.gcmvpn.statsUpdated" as CFString
+    /// Dynamic stats notification name based on group identifier (e.g., "com.example.app.group.statsUpdated")
+    private var statsNotificationName: CFString?
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = SwiftOpenVPNFlutterPlugin()
@@ -22,9 +23,6 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
         let vpnStageE = FlutterEventChannel(name: SwiftOpenVPNFlutterPlugin.EVENT_CHANNEL_VPN_STAGE, binaryMessenger: registrar.messenger)
         
         vpnStageE.setStreamHandler(StageHandler())
-        
-        // Set up Darwin notification observer for stats updates
-        startDarwinStatsObserver()
         
         // Set up the stage for VPNUtils
         self.utils.stage = SwiftOpenVPNFlutterPlugin.stage
@@ -85,8 +83,15 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 self.utils.localizedDescription = localizedDescription
                 self.utils.providerBundleIdentifier = providerBundleIdentifier
                 
+                // Set up stats notification name based on group identifier
+                // Format: "{groupIdentifier}.statsUpdated" (e.g., "com.example.app.group.statsUpdated")
+                self.statsNotificationName = "\(groupIdentifier!).statsUpdated" as CFString
+                
                 self.utils.loadProviderManager{(err:Error?) in
                     if err == nil{
+                        // Set up Darwin notification observer after initialization
+                        self.startDarwinStatsObserver()
+                        
                         // Return current status immediately after initialization
                         let currentStatus = self.utils.currentStatus()
                         result(currentStatus)
@@ -146,6 +151,11 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
     }
     
     private func startDarwinStatsObserver() {
+        guard let notificationName = statsNotificationName else {
+            print("⚠️ OpenVPN Plugin: Stats notification name not set - skipping Darwin observer setup")
+            return
+        }
+        
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             Unmanaged.passUnretained(self).toOpaque(),
@@ -154,21 +164,23 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                     .fromOpaque(observer!).takeUnretainedValue()
                 this.utils.getTrafficStats()
             },
-            statsNotificationName,
+            notificationName,
             nil,
             .deliverImmediately
         )
-        print("📡 OpenVPN Plugin: Set up Darwin notification listener for VPN stats")
+        print("📡 OpenVPN Plugin: Set up Darwin notification listener for VPN stats: \(notificationName)")
     }
     
     deinit {
         // Clean up Darwin notification observer
-        CFNotificationCenterRemoveObserver(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            Unmanaged.passUnretained(self).toOpaque(),
-            CFNotificationName(statsNotificationName),
-            nil
-        )
+        if let notificationName = statsNotificationName {
+            CFNotificationCenterRemoveObserver(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                Unmanaged.passUnretained(self).toOpaque(),
+                CFNotificationName(notificationName),
+                nil
+            )
+        }
     }
     
     
