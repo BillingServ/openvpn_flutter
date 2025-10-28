@@ -152,7 +152,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
     
     private func startDarwinStatsObserver() {
         guard let notificationName = statsNotificationName else {
-            print("⚠️ OpenVPN Plugin: Stats notification name not set - skipping Darwin observer setup")
+            NSLog("⚠️ OpenVPN Plugin: Stats notification name not set - skipping Darwin observer setup")
             return
         }
         
@@ -168,7 +168,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
             nil,
             .deliverImmediately
         )
-        print("📡 OpenVPN Plugin: Set up Darwin notification listener for VPN stats: \(notificationName)")
+        NSLog("📡 OpenVPN Plugin: Set up Darwin notification listener for VPN stats: %@", notificationName)
     }
     
     deinit {
@@ -419,13 +419,13 @@ class VPNUtils {
                 // Push back to disk so Flutter can read immediately
                 sharedDefaults.synchronize()
                 
-                // Debug logging
-                print("🔧 Flutter Plugin: Reading VPN stats:")
-                print("   Connected: \(connectedDate)")
-                print("   Bytes: In=\(bytes_in), Out=\(bytes_out)")
-                print("   Packets: In=\(packets_in), Out=\(packets_out)")
-                print("   Speeds: DL=\(String(format: "%.2f", speed_in)) Mbps, UL=\(String(format: "%.2f", speed_out)) Mbps")
-                print("   ConnectionUpdate: \(connectionUpdate)")
+                // Debug logging with NSLog to avoid redaction
+                NSLog("🔧 Flutter Plugin: Reading VPN stats:")
+                NSLog("   Connected: %@", connectedDate)
+                NSLog("   Bytes: In=%@, Out=%@", bytes_in, bytes_out)
+                NSLog("   Packets: In=%@, Out=%@", packets_in, packets_out)
+                NSLog("   Speeds: DL=%.2f Mbps, UL=%.2f Mbps", speed_in, speed_out)
+                NSLog("   ConnectionUpdate: %@", connectionUpdate)
             } else {
                 // Fallback to original method
                 let formatter = DateFormatter()
@@ -443,7 +443,7 @@ class VPNUtils {
                 // Push back to disk so Flutter can read immediately
                 sharedDefaults.synchronize()
                 
-                print("🔧 Flutter Plugin: Using fallback stats (no vpn_statistics found)")
+                NSLog("🔧 Flutter Plugin: Using fallback stats (no vpn_statistics found)")
             }
         }
     }
