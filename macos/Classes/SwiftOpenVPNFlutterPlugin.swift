@@ -1,9 +1,11 @@
 import Cocoa
 import FlutterMacOS
 import NetworkExtension
+import os
 
 public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
     private let utils = VPNUtils()
+    private static let logger = Logger(subsystem: "com.baseserv.gcmvpn.ovpn.openvpn_flutter", category: "Plugin")
     
     private static var EVENT_CHANNEL_VPN_STAGE = "id.laskarmedia.openvpn_flutter/vpnstage"
     private static var METHOD_CHANNEL_VPN_CONTROL = "id.laskarmedia.openvpn_flutter/vpncontrol"
@@ -152,7 +154,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
     
     private func startDarwinStatsObserver() {
         guard let notificationName = statsNotificationName else {
-            NSLog("⚠️ OpenVPN Plugin: Stats notification name not set - skipping Darwin observer setup")
+            Self.logger.error("⚠️ OpenVPN Plugin: Stats notification name not set - skipping Darwin observer setup")
             return
         }
         
@@ -168,7 +170,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
             nil,
             .deliverImmediately
         )
-        NSLog("📡 OpenVPN Plugin: Set up Darwin notification listener for VPN stats: %@", notificationName)
+        Self.logger.info("📡 OpenVPN Plugin: Set up Darwin notification listener for VPN stats: \(String(describing: notificationName))")
     }
     
     deinit {
@@ -419,13 +421,13 @@ class VPNUtils {
                 // Push back to disk so Flutter can read immediately
                 sharedDefaults.synchronize()
                 
-                // Debug logging with NSLog to avoid redaction
-                NSLog("🔧 Flutter Plugin: Reading VPN stats:")
-                NSLog("   Connected: %@", connectedDate)
-                NSLog("   Bytes: In=%@, Out=%@", bytes_in, bytes_out)
-                NSLog("   Packets: In=%@, Out=%@", packets_in, packets_out)
-                NSLog("   Speeds: DL=%.2f Mbps, UL=%.2f Mbps", speed_in, speed_out)
-                NSLog("   ConnectionUpdate: %@", connectionUpdate)
+                // Debug logging with os_log to avoid redaction
+                SwiftOpenVPNFlutterPlugin.logger.info("🔧 Flutter Plugin: Reading VPN stats:")
+                SwiftOpenVPNFlutterPlugin.logger.info("   Connected: \(connectedDate)")
+                SwiftOpenVPNFlutterPlugin.logger.info("   Bytes: In=\(bytes_in), Out=\(bytes_out)")
+                SwiftOpenVPNFlutterPlugin.logger.info("   Packets: In=\(packets_in), Out=\(packets_out)")
+                SwiftOpenVPNFlutterPlugin.logger.info("   Speeds: DL=\(String(format: "%.2f", speed_in)) Mbps, UL=\(String(format: "%.2f", speed_out)) Mbps")
+                SwiftOpenVPNFlutterPlugin.logger.info("   ConnectionUpdate: \(connectionUpdate)")
             } else {
                 // Fallback to original method
                 let formatter = DateFormatter()
@@ -443,7 +445,7 @@ class VPNUtils {
                 // Push back to disk so Flutter can read immediately
                 sharedDefaults.synchronize()
                 
-                NSLog("🔧 Flutter Plugin: Using fallback stats (no vpn_statistics found)")
+                SwiftOpenVPNFlutterPlugin.logger.info("🔧 Flutter Plugin: Using fallback stats (no vpn_statistics found)")
             }
         }
     }
