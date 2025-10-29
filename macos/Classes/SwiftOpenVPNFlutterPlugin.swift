@@ -361,91 +361,55 @@ class VPNUtils {
         guard let group = groupIdentifier,
               let sharedDefaults = UserDefaults(suiteName: group) else { return }
         
-        // Pull freshest values written by the packet tunnel
         sharedDefaults.synchronize()
         
-        // Try to get comprehensive statistics first
         if let vpnStats = sharedDefaults.dictionary(forKey: "vpn_statistics") {
-                // Use the comprehensive statistics with speed data
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-                
-                let connectedDate = vpnStats["connected_on"] as? String ?? formatter.string(from: Date())
-                
-                // Handle different data types for byte counts
-                let bytes_in: String
-                let bytes_out: String
-                let packets_in: String
-                let packets_out: String
-                
-                if let bytesInUInt64 = vpnStats["byte_in"] as? UInt64 {
-                    bytes_in = String(bytesInUInt64)
-                } else if let bytesInString = vpnStats["byte_in"] as? String {
-                    bytes_in = bytesInString
-                } else {
-                    bytes_in = "0"
-                }
-                
-                if let bytesOutUInt64 = vpnStats["byte_out"] as? UInt64 {
-                    bytes_out = String(bytesOutUInt64)
-                } else if let bytesOutString = vpnStats["byte_out"] as? String {
-                    bytes_out = bytesOutString
-                } else {
-                    bytes_out = "0"
-                }
-                
-                if let packetsInUInt64 = vpnStats["packets_in"] as? UInt64 {
-                    packets_in = String(packetsInUInt64)
-                } else if let packetsInString = vpnStats["packets_in"] as? String {
-                    packets_in = packetsInString
-                } else {
-                    packets_in = "0"
-                }
-                
-                if let packetsOutUInt64 = vpnStats["packets_out"] as? UInt64 {
-                    packets_out = String(packetsOutUInt64)
-                } else if let packetsOutString = vpnStats["packets_out"] as? String {
-                    packets_out = packetsOutString
-                } else {
-                    packets_out = "0"
-                }
-                
-                // Handle speed data (should be Double from VPN extension)
-                let speed_in = vpnStats["speed_in_mbps"] as? Double ?? 0.0
-                let speed_out = vpnStats["speed_out_mbps"] as? Double ?? 0.0
-                
-                // Create enhanced connection update with speed data
-                let connectionUpdate = "\(connectedDate)_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_\(String(format: "%.2f", speed_in))_\(String(format: "%.2f", speed_out))"
-                sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
-                
-                // Push back to disk so Flutter can read immediately
-                sharedDefaults.synchronize()
-                
-                // Debug logging with NSLog to avoid redaction
-                NSLog("%@", "🔧 Flutter Plugin: Reading VPN stats:")
-                NSLog("%@", "   Connected: \(connectedDate)")
-                NSLog("%@", "   Bytes: In=\(bytes_in), Out=\(bytes_out)")
-                NSLog("%@", "   Packets: In=\(packets_in), Out=\(packets_out)")
-                NSLog("%@", "   Speeds: DL=\(String(format: "%.2f", speed_in)) Mbps, UL=\(String(format: "%.2f", speed_out)) Mbps")
-                NSLog("%@", "   ConnectionUpdate: \(connectionUpdate)")
-            } else {
-                // Fallback to original method
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-                
-                let connectedDate = sharedDefaults.object(forKey: "connected_date") as? Date ?? Date()
-                let bytes_in = sharedDefaults.object(forKey: "bytes_in") as? String ?? "0"
-                let bytes_out = sharedDefaults.object(forKey: "bytes_out") as? String ?? "0"
-                let packets_in = sharedDefaults.object(forKey: "packets_in") as? String ?? "0"
-                let packets_out = sharedDefaults.object(forKey: "packets_out") as? String ?? "0"
-                
-                let connectionUpdate = "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.0_0.0"
-                sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
-                
-                // Push back to disk so Flutter can read immediately
-                sharedDefaults.synchronize()
-                
-                NSLog("%@", "🔧 Flutter Plugin: Using fallback stats (no vpn_statistics found)")
-            }
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            let connectedDate = vpnStats["connected_on"] as? String ?? formatter.string(from: Date())
+            
+            // Safely extract byte/packet counts
+            let bytes_in = extractString(from: vpnStats["byte_in"]) ?? "0"
+            let bytes_out = extractString(from: vpnStats["byte_out"]) ?? "0"
+            let packets_in = extractString(from: vpnStats["packets_in"]) ?? "0"
+            let packets_out = extractString(from: vpnStats["packets_out"]) ?? "0"
+            
+            // ⚠️ CRITICAL CHANGE: DO NOT USE speed_in_mbps / speed_out_mbps on macOS
+            // Let Flutter compute speeds from byte deltas instead
+            let speed_in: Double = 0.0
+            let speed_out: Double = 0.0
+            
+            let connectionUpdate = "\(connectedDate)_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_\(String(format: "%.2f", speed_in))_\(String(format: "%.2f", speed_out))"
+            sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+            sharedDefaults.synchronize()
+            
+            NSLog("%@", "🔧 Flutter Plugin: Reading VPN stats (macOS - speeds zeroed for Dart calculation):")
+            NSLog("%@", "   Bytes: In=\(bytes_in), Out=\(bytes_out)")
+            NSLog("%@", "   Speeds: DL=\(speed_in) Mbps, UL=\(speed_out) Mbps")
+        } else {
+            // Fallback
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            let connectedDate = sharedDefaults.object(forKey: "connected_date") as? Date ?? Date()
+            let bytes_in = sharedDefaults.string(forKey: "bytes_in") ?? "0"
+            let bytes_out = sharedDefaults.string(forKey: "bytes_out") ?? "0"
+            let packets_in = sharedDefaults.string(forKey: "packets_in") ?? "0"
+            let packets_out = sharedDefaults.string(forKey: "packets_out") ?? "0"
+            
+            let connectionUpdate = "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.00_0.00"
+            sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
+            sharedDefaults.synchronize()
+            
+            NSLog("%@", "🔧 Flutter Plugin: Using fallback stats")
         }
+    }
+    
+    // Helper to safely convert UInt64 or String to String
+    private func extractString(from value: Any?) -> String? {
+        if let uint = value as? UInt64 {
+            return String(uint)
+        } else if let str = value as? String {
+            return str
+        }
+        return nil
     }
