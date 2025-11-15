@@ -95,12 +95,11 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         // Disable DCO to avoid netsh permission issues
         cmdStream << " --disable-dco";
         
-        // Specify device type based on driver
+        // For WinTun, we need to specify both dev-type and dev to use the adapter we created
         if (currentDriver == DriverType::WINTUN) {
-            // Get the WinTun adapter name
             std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
-            cmdStream << " --dev-type wintun --dev \"" << adapterName << "\"";
-            std::cout << "Using WinTun driver for OpenVPN connection with adapter: " << adapterName << std::endl;
+            cmdStream << " --dev-type wintun --dev " << adapterName;
+            std::cout << "Using WinTun driver with adapter: " << adapterName << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
@@ -627,62 +626,10 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
             modifiedConfig.erase(pos, endPos - pos + 1);
         }
         
-        // When using WinTun, remove 'dev tun' or 'dev tap' lines as they conflict with --dev-type wintun
-        if (currentDriver == DriverType::WINTUN) {
-            pos = 0;
-            while ((pos = modifiedConfig.find("dev tun", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++; // Skip the newline itself
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++; // Include the newline
-                
-                // Check if this is a standalone 'dev tun' line (not part of a comment or other directive)
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("dev tun") != std::string::npos && 
-                    line.find('#') == std::string::npos && 
-                    line.find("dev-type") == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart; // Continue from where we erased
-                    std::cout << "Removed 'dev tun' line for WinTun compatibility" << std::endl;
-                } else {
-                    pos = lineEnd;
-                }
-            }
-            
-            // Also remove 'dev tap' lines
-            pos = 0;
-            while ((pos = modifiedConfig.find("dev tap", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++;
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++;
-                
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("dev tap") != std::string::npos && 
-                    line.find('#') == std::string::npos && 
-                    line.find("dev-type") == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart;
-                    std::cout << "Removed 'dev tap' line for WinTun compatibility" << std::endl;
-                } else {
-                    pos = lineEnd;
-                }
-            }
-        }
-        
+        // Use config as-is from API - command line --dev-type wintun will override config settings
         configFile << modifiedConfig;
         
-        if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap directives)" << std::endl;
-        } else {
-            std::cout << "Using original config without driver modifications" << std::endl;
-        }
+        std::cout << "Using original config from API without modifications" << std::endl;
         std::cout << "Config preview (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
         
         if (!username.empty() && !password.empty()) {
