@@ -118,44 +118,112 @@ bool WinTunManager::loadWinTunDll() {
         return true; // Already loaded
     }
     
+    // Get application directory
+    char appPath[MAX_PATH];
+    std::string appDir;
+    if (GetModuleFileNameA(NULL, appPath, MAX_PATH)) {
+        PathRemoveFileSpecA(appPath);
+        appDir = std::string(appPath);
+    }
+    
+    // CRITICAL: Add directories to DLL search path BEFORE loading wintun.dll
+    // This ensures DLL dependencies (libcrypto, libssl) can be found
+    // Windows searches for DLL dependencies in:
+    // 1. Directory containing the executable
+    // 2. System directories  
+    // 3. Directories added via AddDllDirectory/SetDllDirectory
+    // 4. Current directory
+    // 5. PATH environment variable
+    
+    std::string binDir = appDir + "\\bin";
+    std::vector<DLL_DIRECTORY_COOKIE> dllDirCookies;
+    
+    // Use AddDllDirectory (Windows Vista+) to add directories without replacing default search
+    typedef BOOL (WINAPI *AddDllDirectoryFunc)(PCWSTR);
+    typedef BOOL (WINAPI *RemoveDllDirectoryFunc)(DLL_DIRECTORY_COOKIE);
+    HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+    AddDllDirectoryFunc addDllDir = nullptr;
+    RemoveDllDirectoryFunc removeDllDir = nullptr;
+    
+    if (kernel32) {
+        addDllDir = (AddDllDirectoryFunc)GetProcAddress(kernel32, "AddDllDirectory");
+        removeDllDir = (RemoveDllDirectoryFunc)GetProcAddress(kernel32, "RemoveDllDirectory");
+    }
+    
+    // Add bin directory if it exists
+    if (!appDir.empty() && PathFileExistsA(binDir.c_str())) {
+        if (addDllDir) {
+            // Convert to wide string for AddDllDirectory
+            int wlen = MultiByteToWideChar(CP_ACP, 0, binDir.c_str(), -1, NULL, 0);
+            std::vector<wchar_t> wbinDir(wlen);
+            MultiByteToWideChar(CP_ACP, 0, binDir.c_str(), -1, &wbinDir[0], wlen);
+            DLL_DIRECTORY_COOKIE cookie = addDllDir(&wbinDir[0]);
+            if (cookie) {
+                dllDirCookies.push_back(cookie);
+                std::cout << "Added bin directory to DLL search path: " << binDir << std::endl;
+            }
+        } else {
+            // Fallback to SetDllDirectory for older Windows
+            SetDllDirectoryA(binDir.c_str());
+            std::cout << "Added bin directory to DLL search path (via SetDllDirectory): " << binDir << std::endl;
+        }
+    }
+    
+    // Also add app directory (where dependencies might also be)
+    if (!appDir.empty() && addDllDir) {
+        int wlen = MultiByteToWideChar(CP_ACP, 0, appDir.c_str(), -1, NULL, 0);
+        std::vector<wchar_t> wappDir(wlen);
+        MultiByteToWideChar(CP_ACP, 0, appDir.c_str(), -1, &wappDir[0], wlen);
+        DLL_DIRECTORY_COOKIE cookie = addDllDir(&wappDir[0]);
+        if (cookie) {
+            dllDirCookies.push_back(cookie);
+            std::cout << "Added app directory to DLL search path: " << appDir << std::endl;
+        }
+    }
+    
     // Try to load WinTun.dll from various locations
+    // Prefer app directory first (dependencies should be there too)
     std::vector<std::string> possiblePaths = {
+        appDir + "\\wintun.dll",         // App directory (preferred - dependencies nearby)
+        appDir + "\\bin\\wintun.dll",    // Bin subdirectory
         "wintun.dll",                    // Current directory
         ".\\bin\\wintun.dll",           // bin subdirectory
         ".\\wintun\\wintun.dll",        // wintun subdirectory
     };
     
-    // Get application directory and add to search paths
-    char appPath[MAX_PATH];
-    if (GetModuleFileNameA(NULL, appPath, MAX_PATH)) {
-        PathRemoveFileSpecA(appPath);
-        std::string appDir(appPath);
-        possiblePaths.insert(possiblePaths.begin(), {
-            appDir + "\\wintun.dll",
-            appDir + "\\bin\\wintun.dll",
-            appDir + "\\wintun\\wintun.dll"
-        });
-    }
-    
     for (const auto& path : possiblePaths) {
-        // Try loading with LOAD_WITH_ALTERED_SEARCH_PATH to help with dependencies
+        // Use LOAD_WITH_ALTERED_SEARCH_PATH to search in DLL's directory first
+        // This ensures dependencies in the same directory as wintun.dll are found
         wintunDll = LoadLibraryExA(path.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (!wintunDll) {
-            // Fallback to regular LoadLibrary
+            // Fallback to regular LoadLibrary (will use AddDllDirectory paths)
             wintunDll = LoadLibraryA(path.c_str());
         }
         if (wintunDll) {
             std::cout << "WinTun.dll loaded from: " << path << std::endl;
-            // Verify DLL is valid by checking if we can get module handle
-            HMODULE verifyHandle = GetModuleHandleA(path.c_str());
-            if (verifyHandle != wintunDll) {
-                std::cerr << "Warning: DLL handle verification failed" << std::endl;
+            
+            // Verify DLL loaded correctly by checking if we can get a proc address
+            // This helps catch cases where DLL loads but isn't initialized
+            FARPROC testProc = GetProcAddress(wintunDll, "DllMain");
+            if (!testProc) {
+                std::cerr << "Warning: DLL loaded but DllMain not found - DLL may not be initialized" << std::endl;
             }
+            
             return true;
         } else {
             DWORD error = GetLastError();
             std::cerr << "Failed to load from " << path << ". Error: " << error << std::endl;
         }
+    }
+    
+    // Clean up DLL directory cookies
+    if (removeDllDir) {
+        for (auto cookie : dllDirCookies) {
+            removeDllDir(cookie);
+        }
+    } else {
+        // Fallback: restore DLL search path
+        SetDllDirectoryA(NULL);
     }
     
     DWORD error = GetLastError();
@@ -183,16 +251,76 @@ bool WinTunManager::loadWinTunFunctions() {
         return false;
     }
     
+    // Diagnostic: Try to get DLL info
+    char modulePath[MAX_PATH];
+    if (GetModuleFileNameA(wintunDll, modulePath, MAX_PATH)) {
+        std::cout << "Attempting to load functions from: " << modulePath << std::endl;
+    }
+    
+    // Verify DLL is valid by checking if we can get any export
+    // Try to get the DLL's entry point or any common export
+    FARPROC testProc = GetProcAddress(wintunDll, "DllGetClassObject");
+    if (testProc) {
+        std::cout << "DLL appears to be a COM DLL (unexpected for WinTun)" << std::endl;
+    }
+    
+    // Check DLL version info if available
+    // Note: This is a diagnostic to help identify the DLL
+    
+    // Diagnostic: Try to enumerate some common exports to verify DLL type
+    const char* testExports[] = {
+        "DllMain", "DllGetClassObject", "DllCanUnloadNow", "DllRegisterServer",
+        "WinTunCreateAdapter", "WintunCreateAdapter", "wintun_create_adapter"
+    };
+    std::cout << "Checking DLL exports..." << std::endl;
+    bool foundAnyExport = false;
+    for (const char* exportName : testExports) {
+        FARPROC proc = GetProcAddress(wintunDll, exportName);
+        if (proc) {
+            std::cout << "Found export: " << exportName << std::endl;
+            foundAnyExport = true;
+        }
+    }
+    if (!foundAnyExport) {
+        std::cerr << "WARNING: Could not find any common exports in DLL!" << std::endl;
+        std::cerr << "This suggests the DLL might not be a valid WinTun DLL or is corrupted." << std::endl;
+    }
+    
+    // Try loading with both ANSI and Unicode function name variants
+    // Some DLLs export functions with different name formats
+    const char* functionNames[] = {
+        "WinTunCreateAdapter",
+        "_WinTunCreateAdapter@12",  // __stdcall decorated name
+        "WinTunCreateAdapterA",     // ANSI variant
+        "WinTunCreateAdapterW"     // Unicode variant
+    };
+    
     // Load required WinTun functions with detailed error reporting
     WinTunCreateAdapter = reinterpret_cast<WINTUN_CREATE_ADAPTER_FUNC>(
         GetProcAddress(wintunDll, "WinTunCreateAdapter"));
     if (!WinTunCreateAdapter) {
+        // Try alternative names
+        for (int i = 1; i < 4 && !WinTunCreateAdapter; i++) {
+            WinTunCreateAdapter = reinterpret_cast<WINTUN_CREATE_ADAPTER_FUNC>(
+                GetProcAddress(wintunDll, functionNames[i]));
+            if (WinTunCreateAdapter) {
+                std::cout << "Found WinTunCreateAdapter with name: " << functionNames[i] << std::endl;
+                break;
+            }
+        }
+    }
+    if (!WinTunCreateAdapter) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunCreateAdapter. Error: " << error << std::endl;
+        std::cerr << "Tried names: WinTunCreateAdapter, _WinTunCreateAdapter@12, WinTunCreateAdapterA, WinTunCreateAdapterW" << std::endl;
     }
     
     WinTunCloseAdapter = reinterpret_cast<WINTUN_CLOSE_ADAPTER_FUNC>(
         GetProcAddress(wintunDll, "WinTunCloseAdapter"));
+    if (!WinTunCloseAdapter) {
+        WinTunCloseAdapter = reinterpret_cast<WINTUN_CLOSE_ADAPTER_FUNC>(
+            GetProcAddress(wintunDll, "_WinTunCloseAdapter@4"));
+    }
     if (!WinTunCloseAdapter) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunCloseAdapter. Error: " << error << std::endl;
@@ -201,6 +329,10 @@ bool WinTunManager::loadWinTunFunctions() {
     WinTunStartSession = reinterpret_cast<WINTUN_START_SESSION_FUNC>(
         GetProcAddress(wintunDll, "WinTunStartSession"));
     if (!WinTunStartSession) {
+        WinTunStartSession = reinterpret_cast<WINTUN_START_SESSION_FUNC>(
+            GetProcAddress(wintunDll, "_WinTunStartSession@8"));
+    }
+    if (!WinTunStartSession) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunStartSession. Error: " << error << std::endl;
     }
@@ -208,12 +340,20 @@ bool WinTunManager::loadWinTunFunctions() {
     WinTunEndSession = reinterpret_cast<WINTUN_END_SESSION_FUNC>(
         GetProcAddress(wintunDll, "WinTunEndSession"));
     if (!WinTunEndSession) {
+        WinTunEndSession = reinterpret_cast<WINTUN_END_SESSION_FUNC>(
+            GetProcAddress(wintunDll, "_WinTunEndSession@4"));
+    }
+    if (!WinTunEndSession) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunEndSession. Error: " << error << std::endl;
     }
     
     WinTunGetRunningDriverVersion = reinterpret_cast<WINTUN_GET_RUNNING_DRIVER_VERSION_FUNC>(
         GetProcAddress(wintunDll, "WinTunGetRunningDriverVersion"));
+    if (!WinTunGetRunningDriverVersion) {
+        WinTunGetRunningDriverVersion = reinterpret_cast<WINTUN_GET_RUNNING_DRIVER_VERSION_FUNC>(
+            GetProcAddress(wintunDll, "_WinTunGetRunningDriverVersion@0"));
+    }
     if (!WinTunGetRunningDriverVersion) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunGetRunningDriverVersion. Error: " << error << std::endl;
