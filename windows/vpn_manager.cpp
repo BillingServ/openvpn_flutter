@@ -672,12 +672,33 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
                     pos = lineEnd;
                 }
             }
+            
+            // Add dev-type wintun to the config file to ensure consistency
+            // Find a good place to insert it (after remote line or at the beginning)
+            size_t insertPos = modifiedConfig.find("remote ");
+            if (insertPos != std::string::npos) {
+                size_t remoteLineEnd = modifiedConfig.find('\n', insertPos);
+                if (remoteLineEnd != std::string::npos) {
+                    modifiedConfig.insert(remoteLineEnd + 1, "dev-type wintun\n");
+                    std::cout << "Added 'dev-type wintun' to config file" << std::endl;
+                } else {
+                    modifiedConfig += "\ndev-type wintun\n";
+                }
+            } else {
+                // If no remote line found, add at the beginning after 'client'
+                size_t clientPos = modifiedConfig.find("client\n");
+                if (clientPos != std::string::npos) {
+                    modifiedConfig.insert(clientPos + 7, "dev-type wintun\n");
+                } else {
+                    modifiedConfig = "dev-type wintun\n" + modifiedConfig;
+                }
+            }
         }
         
         configFile << modifiedConfig;
         
         if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap directives)" << std::endl;
+            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap, added dev-type wintun)" << std::endl;
         } else {
             std::cout << "Using original config from API without modifications" << std::endl;
         }
