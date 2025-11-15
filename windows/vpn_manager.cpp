@@ -96,16 +96,16 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         cmdStream << " --disable-dco";
         
         // For WinTun, specify both dev-type and dev with the adapter name
-        // Also ignore any device-related options from server to prevent conflicts
+        // Also ignore device-related options from server, but allow topology/ifconfig for WinTun subnet mode
         if (currentDriver == DriverType::WINTUN) {
             std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
             cmdStream << " --dev-type wintun --dev \"" << adapterName << "\"";
             cmdStream << " --pull-filter ignore \"dev\"";
             cmdStream << " --pull-filter ignore \"dev-type\"";
-            cmdStream << " --pull-filter ignore \"topology\"";
+            cmdStream << " --topology subnet";
             std::cout << "DEBUG: Using WinTun driver with adapter: " << adapterName << std::endl;
-            std::cout << "DEBUG: Command line will include: --dev-type wintun --dev \"" << adapterName << "\"" << std::endl;
-            std::cout << "DEBUG: Added pull-filters to ignore server device/topology settings" << std::endl;
+            std::cout << "DEBUG: Command line will include: --dev-type wintun --dev \"" << adapterName << "\" --topology subnet" << std::endl;
+            std::cout << "DEBUG: Added pull-filter to ignore server dev/dev-type, but allowing topology/ifconfig for WinTun" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
