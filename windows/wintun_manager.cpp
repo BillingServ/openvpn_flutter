@@ -138,15 +138,28 @@ bool WinTunManager::loadWinTunDll() {
     }
     
     for (const auto& path : possiblePaths) {
-        wintunDll = LoadLibraryA(path.c_str());
+        // Try loading with LOAD_WITH_ALTERED_SEARCH_PATH to help with dependencies
+        wintunDll = LoadLibraryExA(path.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!wintunDll) {
+            // Fallback to regular LoadLibrary
+            wintunDll = LoadLibraryA(path.c_str());
+        }
         if (wintunDll) {
             std::cout << "WinTun.dll loaded from: " << path << std::endl;
+            // Verify DLL is valid by checking if we can get module handle
+            HMODULE verifyHandle = GetModuleHandleA(path.c_str());
+            if (verifyHandle != wintunDll) {
+                std::cerr << "Warning: DLL handle verification failed" << std::endl;
+            }
             return true;
+        } else {
+            DWORD error = GetLastError();
+            std::cerr << "Failed to load from " << path << ". Error: " << error << std::endl;
         }
     }
     
     DWORD error = GetLastError();
-    std::cerr << "Failed to load WinTun.dll. Error: " << error << std::endl;
+    std::cerr << "Failed to load WinTun.dll from all attempted paths. Last error: " << error << std::endl;
     std::cerr << "Make sure wintun.dll is available in your application directory" << std::endl;
     return false;
 }
@@ -170,26 +183,64 @@ bool WinTunManager::loadWinTunFunctions() {
         return false;
     }
     
-    // Load required WinTun functions
+    // Load required WinTun functions with detailed error reporting
     WinTunCreateAdapter = reinterpret_cast<WINTUN_CREATE_ADAPTER_FUNC>(
         GetProcAddress(wintunDll, "WinTunCreateAdapter"));
+    if (!WinTunCreateAdapter) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to load WinTunCreateAdapter. Error: " << error << std::endl;
+    }
     
     WinTunCloseAdapter = reinterpret_cast<WINTUN_CLOSE_ADAPTER_FUNC>(
         GetProcAddress(wintunDll, "WinTunCloseAdapter"));
+    if (!WinTunCloseAdapter) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to load WinTunCloseAdapter. Error: " << error << std::endl;
+    }
     
     WinTunStartSession = reinterpret_cast<WINTUN_START_SESSION_FUNC>(
         GetProcAddress(wintunDll, "WinTunStartSession"));
+    if (!WinTunStartSession) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to load WinTunStartSession. Error: " << error << std::endl;
+    }
     
     WinTunEndSession = reinterpret_cast<WINTUN_END_SESSION_FUNC>(
         GetProcAddress(wintunDll, "WinTunEndSession"));
+    if (!WinTunEndSession) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to load WinTunEndSession. Error: " << error << std::endl;
+    }
     
     WinTunGetRunningDriverVersion = reinterpret_cast<WINTUN_GET_RUNNING_DRIVER_VERSION_FUNC>(
         GetProcAddress(wintunDll, "WinTunGetRunningDriverVersion"));
+    if (!WinTunGetRunningDriverVersion) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to load WinTunGetRunningDriverVersion. Error: " << error << std::endl;
+    }
     
     // Check if all required functions were loaded
     if (!WinTunCreateAdapter || !WinTunCloseAdapter || 
         !WinTunStartSession || !WinTunEndSession) {
         std::cerr << "Failed to load required WinTun functions" << std::endl;
+        std::cerr << "WinTunCreateAdapter: " << (WinTunCreateAdapter ? "OK" : "FAILED") << std::endl;
+        std::cerr << "WinTunCloseAdapter: " << (WinTunCloseAdapter ? "OK" : "FAILED") << std::endl;
+        std::cerr << "WinTunStartSession: " << (WinTunStartSession ? "OK" : "FAILED") << std::endl;
+        std::cerr << "WinTunEndSession: " << (WinTunEndSession ? "OK" : "FAILED") << std::endl;
+        
+        // Diagnostic: Check if DLL is valid by trying to get module filename
+        char modulePath[MAX_PATH];
+        if (GetModuleFileNameA(wintunDll, modulePath, MAX_PATH)) {
+            std::cerr << "DLL module path: " << modulePath << std::endl;
+        }
+        
+        // Note: GetProcAddress returns NULL if function not found, but doesn't set error code
+        // This suggests the DLL might be wrong version, corrupted, or missing exports
+        std::cerr << "Possible causes:" << std::endl;
+        std::cerr << "  1. DLL version mismatch (wrong WinTun version)" << std::endl;
+        std::cerr << "  2. DLL is corrupted or incomplete" << std::endl;
+        std::cerr << "  3. DLL architecture mismatch (x86 vs x64)" << std::endl;
+        std::cerr << "  4. Missing DLL dependencies" << std::endl;
         return false;
     }
     
