@@ -99,7 +99,8 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         if (currentDriver == DriverType::WINTUN) {
             std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
             cmdStream << " --dev-type wintun --dev \"" << adapterName << "\"";
-            std::cout << "Using WinTun driver with adapter: " << adapterName << std::endl;
+            std::cout << "DEBUG: Using WinTun driver with adapter: " << adapterName << std::endl;
+            std::cout << "DEBUG: Command line will include: --dev-type wintun --dev \"" << adapterName << "\"" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
@@ -109,7 +110,22 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         }
         
         std::string cmdLine = cmdStream.str();
-        std::cout << "OpenVPN command line: " << cmdLine << std::endl;
+        std::cout << "DEBUG: Full OpenVPN command line: " << cmdLine << std::endl;
+        
+        // DEBUG: Verify config file exists and show its first few lines
+        std::ifstream configCheck(currentConfigPath);
+        if (configCheck.is_open()) {
+            std::cout << "DEBUG: Config file exists at: " << currentConfigPath << std::endl;
+            std::string firstLine;
+            int lineCount = 0;
+            while (std::getline(configCheck, firstLine) && lineCount < 10) {
+                std::cout << "DEBUG: Config line " << (lineCount + 1) << ": " << firstLine << std::endl;
+                lineCount++;
+            }
+            configCheck.close();
+        } else {
+            std::cout << "ERROR: Config file does not exist at: " << currentConfigPath << std::endl;
+        }
         
         // Check if we're already running as admin
         if (!isRunningAsAdmin()) {
@@ -673,36 +689,59 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
                 }
             }
             
-            // Add dev-type wintun to the config file to ensure consistency
-            // Find a good place to insert it (after remote line or at the beginning)
-            size_t insertPos = modifiedConfig.find("remote ");
-            if (insertPos != std::string::npos) {
-                size_t remoteLineEnd = modifiedConfig.find('\n', insertPos);
-                if (remoteLineEnd != std::string::npos) {
-                    modifiedConfig.insert(remoteLineEnd + 1, "dev-type wintun\n");
-                    std::cout << "Added 'dev-type wintun' to config file" << std::endl;
+            // Remove 'persist-tun' as it may conflict with WinTun
+            pos = 0;
+            while ((pos = modifiedConfig.find("persist-tun", pos)) != std::string::npos) {
+                size_t lineStart = modifiedConfig.rfind('\n', pos);
+                if (lineStart == std::string::npos) lineStart = 0;
+                else lineStart++;
+                
+                size_t lineEnd = modifiedConfig.find('\n', pos);
+                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
+                else lineEnd++;
+                
+                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
+                if (line.find("persist-tun") != std::string::npos && 
+                    line.find('#') == std::string::npos) {
+                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
+                    pos = lineStart;
+                    std::cout << "Removed 'persist-tun' line for WinTun compatibility" << std::endl;
                 } else {
-                    modifiedConfig += "\ndev-type wintun\n";
-                }
-            } else {
-                // If no remote line found, add at the beginning after 'client'
-                size_t clientPos = modifiedConfig.find("client\n");
-                if (clientPos != std::string::npos) {
-                    modifiedConfig.insert(clientPos + 7, "dev-type wintun\n");
-                } else {
-                    modifiedConfig = "dev-type wintun\n" + modifiedConfig;
+                    pos = lineEnd;
                 }
             }
+            
+            // DEBUG: Check for any remaining dev-related directives
+            std::cout << "DEBUG: Checking for remaining dev-related directives..." << std::endl;
+            if (modifiedConfig.find("dev ") != std::string::npos) {
+                std::cout << "WARNING: Found 'dev ' directive still in config after removal attempt" << std::endl;
+            }
+            if (modifiedConfig.find("dev-type") != std::string::npos) {
+                std::cout << "INFO: Found existing 'dev-type' directive in config" << std::endl;
+            }
+            
+            // Don't add dev-type wintun to config file - let command line override handle it
+            // This avoids potential conflicts between config file and command line
+            std::cout << "DEBUG: Not adding dev-type wintun to config file - will use command line only" << std::endl;
         }
         
         configFile << modifiedConfig;
         
         if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap, added dev-type wintun)" << std::endl;
+            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap/persist-tun)" << std::endl;
+            std::cout << "DEBUG: Final config file will be written without dev-type wintun (using command line only)" << std::endl;
         } else {
             std::cout << "Using original config from API without modifications" << std::endl;
         }
-        std::cout << "Config preview (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
+        
+        // DEBUG: Show full config content for WinTun
+        if (currentDriver == DriverType::WINTUN) {
+            std::cout << "DEBUG: Full modified config content:" << std::endl;
+            std::cout << modifiedConfig << std::endl;
+            std::cout << "DEBUG: End of modified config" << std::endl;
+        } else {
+            std::cout << "Config preview (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
+        }
         
         if (!username.empty() && !password.empty()) {
             std::string authPath = appDir + "\\openvpn_flutter_auth.txt";
