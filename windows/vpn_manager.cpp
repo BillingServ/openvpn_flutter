@@ -96,14 +96,12 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         cmdStream << " --disable-dco";
         
         // For WinTun, config file has 'dev tun' and 'dev-type wintun'
-        // Command line can specify adapter name, but dev-type is in config file
+        // OpenVPN will automatically use the WinTun adapter when dev-type wintun is specified
+        // Do NOT add --dev on command line as it conflicts with config file settings
         if (currentDriver == DriverType::WINTUN) {
-            std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
-            cmdStream << " --dev \"" << adapterName << "\"";
             cmdStream << " --pull-filter ignore \"dev\"";
             cmdStream << " --pull-filter ignore \"dev-type\"";
-            std::cout << "DEBUG: Using WinTun driver with adapter: " << adapterName << std::endl;
-            std::cout << "DEBUG: Command line will include: --dev \"" << adapterName << "\"" << std::endl;
+            std::cout << "DEBUG: Using WinTun driver - OpenVPN will auto-detect adapter from dev-type wintun" << std::endl;
             std::cout << "DEBUG: Config file has 'dev tun' and 'dev-type wintun' - OpenVPN will use these" << std::endl;
             std::cout << "DEBUG: Added pull-filter to ignore server dev/dev-type (using config file values)" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
