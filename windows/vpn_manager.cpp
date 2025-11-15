@@ -95,6 +95,15 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         // Disable DCO to avoid netsh permission issues
         cmdStream << " --disable-dco";
         
+        // Specify device type based on driver
+        if (currentDriver == DriverType::WINTUN) {
+            cmdStream << " --dev-type wintun";
+            std::cout << "Using WinTun driver for OpenVPN connection" << std::endl;
+        } else if (currentDriver == DriverType::TAP_WINDOWS) {
+            cmdStream << " --dev-type tap";
+            std::cout << "Using TAP-Windows driver for OpenVPN connection" << std::endl;
+        }
+        
         std::string cmdLine = cmdStream.str();
         std::cout << "OpenVPN command line: " << cmdLine << std::endl;
         
