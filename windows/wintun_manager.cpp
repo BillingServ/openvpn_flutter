@@ -139,7 +139,8 @@ bool WinTunManager::loadWinTunDll() {
     std::vector<DLL_DIRECTORY_COOKIE> dllDirCookies;
     
     // Use AddDllDirectory (Windows Vista+) to add directories without replacing default search
-    typedef BOOL (WINAPI *AddDllDirectoryFunc)(PCWSTR);
+    // AddDllDirectory returns DLL_DIRECTORY_COOKIE (PVOID), NULL on failure
+    typedef DLL_DIRECTORY_COOKIE (WINAPI *AddDllDirectoryFunc)(PCWSTR);
     typedef BOOL (WINAPI *RemoveDllDirectoryFunc)(DLL_DIRECTORY_COOKIE);
     HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
     AddDllDirectoryFunc addDllDir = nullptr;
@@ -369,9 +370,9 @@ bool WinTunManager::loadWinTunFunctions() {
         std::cerr << "WinTunEndSession: " << (WinTunEndSession ? "OK" : "FAILED") << std::endl;
         
         // Diagnostic: Check if DLL is valid by trying to get module filename
-        char modulePath[MAX_PATH];
-        if (GetModuleFileNameA(wintunDll, modulePath, MAX_PATH)) {
-            std::cerr << "DLL module path: " << modulePath << std::endl;
+        char dllModulePath[MAX_PATH];
+        if (GetModuleFileNameA(wintunDll, dllModulePath, MAX_PATH)) {
+            std::cerr << "DLL module path: " << dllModulePath << std::endl;
         }
         
         // Note: GetProcAddress returns NULL if function not found, but doesn't set error code
