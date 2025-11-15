@@ -95,19 +95,22 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         // Disable DCO to avoid netsh permission issues
         cmdStream << " --disable-dco";
         
-        // For WinTun, use --dev tun --dev-type wintun and --dev-node to specify adapter name
-        // OpenVPN 2.6.14+ requires --dev tun (device type) and --dev-type wintun (driver type)
-        // --dev-node specifies the adapter name (optional but recommended)
+        // For WinTun, OpenVPN 2.6.14 requires:
+        // 1. --dev tun (device type = TUN) - MUST be specified
+        // 2. --dev-type wintun (driver type = WinTun) - MUST be specified  
+        // 3. --dev-node "adapter-name" (adapter name) - MUST be specified
+        // 4. --topology subnet (to match server push and avoid conflicts)
+        // Config file should have 'dev tun' but NOT 'dev-type'
         if (currentDriver == DriverType::WINTUN) {
             std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
             cmdStream << " --dev tun";
             cmdStream << " --dev-type wintun";
             cmdStream << " --dev-node \"" << adapterName << "\"";
+            cmdStream << " --topology subnet";
             cmdStream << " --pull-filter ignore \"dev\"";
             cmdStream << " --pull-filter ignore \"dev-type\"";
-            std::cout << "DEBUG: Using WinTun driver - specified --dev tun --dev-type wintun --dev-node \"" << adapterName << "\" on command line" << std::endl;
-            std::cout << "DEBUG: Config file has dev/dev-type removed to avoid conflicts with command line" << std::endl;
-            std::cout << "DEBUG: Added pull-filter to ignore server dev/dev-type (using command line values)" << std::endl;
+            std::cout << "DEBUG: WinTun configuration: --dev tun --dev-type wintun --dev-node \"" << adapterName << "\" --topology subnet" << std::endl;
+            std::cout << "DEBUG: Config file has 'dev tun', command line explicitly sets all required parameters" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
@@ -736,26 +739,22 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
                 }
             }
             
-            // Remove 'dev tun' lines (we specify on command line)
-            pos = 0;
-            while ((pos = modifiedConfig.find("dev tun", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++;
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++;
-                
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("dev tun") != std::string::npos && 
-                    line.find('#') == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart;
-                    std::cout << "Removed 'dev tun' line from config (using command line instead)" << std::endl;
+            // Ensure 'dev tun' exists in config file (OpenVPN needs this to know it's TUN)
+            // We'll use --dev-type wintun on command line, but config needs 'dev tun'
+            if (modifiedConfig.find("dev tun") == std::string::npos) {
+                // Add 'dev tun' after 'remote' line
+                size_t insertPos = modifiedConfig.find("remote ");
+                if (insertPos != std::string::npos) {
+                    size_t remoteLineEnd = modifiedConfig.find('\n', insertPos);
+                    if (remoteLineEnd != std::string::npos) {
+                        modifiedConfig.insert(remoteLineEnd + 1, "dev tun\n");
+                        std::cout << "Added 'dev tun' to config file for WinTun (required for TUN device type)" << std::endl;
+                    }
                 } else {
-                    pos = lineEnd;
+                    modifiedConfig = "dev tun\n" + modifiedConfig;
                 }
+            } else {
+                std::cout << "Found 'dev tun' in config - keeping it for WinTun" << std::endl;
             }
             
             // Remove 'persist-tun' as it may conflict with WinTun
@@ -806,8 +805,8 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
         configFile << modifiedConfig;
         
         if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Modified config for WinTun compatibility (removed dev/dev-type from config, using command line instead)" << std::endl;
-            std::cout << "DEBUG: Final config file has dev/dev-type removed - using command line arguments instead" << std::endl;
+            std::cout << "Modified config for WinTun compatibility (kept 'dev tun' in config, removed 'dev-type', using --dev-type wintun on command line)" << std::endl;
+            std::cout << "DEBUG: Config file has 'dev tun' (device type), command line has '--dev-type wintun' (driver type)" << std::endl;
         } else {
             std::cout << "Using original config from API without modifications" << std::endl;
         }
