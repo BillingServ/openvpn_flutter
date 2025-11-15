@@ -95,11 +95,11 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         // Disable DCO to avoid netsh permission issues
         cmdStream << " --disable-dco";
         
-        // For WinTun, specify dev-type to override config's dev tun/tap setting
-        // Don't specify --dev to let OpenVPN find the adapter automatically
+        // For WinTun, specify both dev-type and dev with the adapter name
         if (currentDriver == DriverType::WINTUN) {
-            cmdStream << " --dev-type wintun";
-            std::cout << "Using WinTun driver - OpenVPN will find adapter automatically" << std::endl;
+            std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
+            cmdStream << " --dev-type wintun --dev \"" << adapterName << "\"";
+            std::cout << "Using WinTun driver with adapter: " << adapterName << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
