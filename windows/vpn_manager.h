@@ -36,6 +36,7 @@ private:
     DriverType preferredDriver = DriverType::WINTUN;
     bool allowFallbackToTAP = true;
     DriverType currentDriver = DriverType::WINTUN;
+    bool driverInitialized = false;
     
     // WinTun management
     std::unique_ptr<WinTunManager> wintunManager;

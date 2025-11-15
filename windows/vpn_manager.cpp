@@ -30,7 +30,9 @@ namespace openvpn_flutter {
 VPNManager::VPNManager() {
     ZeroMemory(&processInfo, sizeof(processInfo));
     wintunManager = std::make_unique<WinTunManager>();
-    initializeDriver();
+    // Don't initialize driver in constructor - do it lazily when needed
+    // This prevents crashes during plugin registration
+    // initializeDriver();
 }
 
 VPNManager::~VPNManager() {
@@ -44,6 +46,15 @@ void VPNManager::setEventSink(flutter::EventSink<flutter::EncodableValue>* sink)
 bool VPNManager::startVPN(const std::string& config, const std::string& username, const std::string& password) {
     if (isConnected || isConnecting) {
         return false;
+    }
+    
+    // Initialize driver if not already initialized
+    if (!driverInitialized) {
+        if (!initializeDriver()) {
+            updateStatus("error");
+            return false;
+        }
+        driverInitialized = true;
     }
     
     // Ensure driver is available
@@ -234,6 +245,7 @@ bool VPNManager::initializeDriver() {
         
         if (initializeWinTun()) {
             currentDriver = DriverType::WINTUN;
+            driverInitialized = true;
             std::cout << "Using WinTun driver for VPN connections" << std::endl;
             return true;
         }
@@ -242,11 +254,13 @@ bool VPNManager::initializeDriver() {
     // Fallback to TAP-Windows if allowed
     if (allowFallbackToTAP && initializeTapDriver()) {
         currentDriver = DriverType::TAP_WINDOWS;
+        driverInitialized = true;
         std::cout << "Using TAP-Windows driver for VPN connections" << std::endl;
         return true;
     }
     
     std::cerr << "Failed to initialize any VPN driver" << std::endl;
+    driverInitialized = false;
     return false;
 }
 
