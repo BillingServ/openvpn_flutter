@@ -102,9 +102,10 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             cmdStream << " --dev-type wintun --dev \"" << adapterName << "\"";
             cmdStream << " --pull-filter ignore \"dev\"";
             cmdStream << " --pull-filter ignore \"dev-type\"";
+            cmdStream << " --pull-filter ignore \"topology\"";
             std::cout << "DEBUG: Using WinTun driver with adapter: " << adapterName << std::endl;
             std::cout << "DEBUG: Command line will include: --dev-type wintun --dev \"" << adapterName << "\"" << std::endl;
-            std::cout << "DEBUG: Added pull-filter to ignore server device settings" << std::endl;
+            std::cout << "DEBUG: Added pull-filters to ignore server device/topology settings" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
@@ -720,9 +721,9 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
             if (modifiedConfig.find("dev ") != std::string::npos) {
                 std::cout << "WARNING: Found 'dev ' directive still in config after removal attempt" << std::endl;
             }
+            // Remove any existing dev-type directives - we'll use command line only
             if (modifiedConfig.find("dev-type") != std::string::npos) {
-                std::cout << "INFO: Found existing 'dev-type' directive in config, will replace" << std::endl;
-                // Remove existing dev-type if present
+                std::cout << "INFO: Found existing 'dev-type' directive in config, removing it" << std::endl;
                 pos = 0;
                 while ((pos = modifiedConfig.find("dev-type", pos)) != std::string::npos) {
                     size_t lineStart = modifiedConfig.rfind('\n', pos);
@@ -738,41 +739,22 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
                         line.find('#') == std::string::npos) {
                         modifiedConfig.erase(lineStart, lineEnd - lineStart);
                         pos = lineStart;
-                        std::cout << "Removed existing 'dev-type' line" << std::endl;
+                        std::cout << "Removed existing 'dev-type' line from config" << std::endl;
                     } else {
                         pos = lineEnd;
                     }
                 }
             }
             
-            // Add dev-type wintun to config file after remote line for consistency
-            size_t insertPos = modifiedConfig.find("remote ");
-            if (insertPos != std::string::npos) {
-                size_t remoteLineEnd = modifiedConfig.find('\n', insertPos);
-                if (remoteLineEnd != std::string::npos) {
-                    modifiedConfig.insert(remoteLineEnd + 1, "dev-type wintun\n");
-                    std::cout << "DEBUG: Added 'dev-type wintun' to config file after remote line" << std::endl;
-                } else {
-                    modifiedConfig += "\ndev-type wintun\n";
-                }
-            } else {
-                // If no remote line found, add at the beginning after 'client'
-                size_t clientPos = modifiedConfig.find("client\n");
-                if (clientPos != std::string::npos) {
-                    modifiedConfig.insert(clientPos + 7, "dev-type wintun\n");
-                    std::cout << "DEBUG: Added 'dev-type wintun' to config file after client line" << std::endl;
-                } else {
-                    modifiedConfig = "dev-type wintun\n" + modifiedConfig;
-                    std::cout << "DEBUG: Added 'dev-type wintun' to beginning of config file" << std::endl;
-                }
-            }
+            // Don't add dev-type wintun to config file - use command line only to avoid conflicts
+            std::cout << "DEBUG: Not adding dev-type to config file - using command line arguments only" << std::endl;
         }
         
         configFile << modifiedConfig;
         
         if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap/persist-tun, added dev-type wintun)" << std::endl;
-            std::cout << "DEBUG: Final config file includes dev-type wintun" << std::endl;
+            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap/persist-tun/dev-type)" << std::endl;
+            std::cout << "DEBUG: Final config file has NO dev-type - using command line arguments only" << std::endl;
         } else {
             std::cout << "Using original config from API without modifications" << std::endl;
         }
