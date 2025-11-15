@@ -95,15 +95,16 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         // Disable DCO to avoid netsh permission issues
         cmdStream << " --disable-dco";
         
-        // For WinTun, config file has 'dev tun' and 'dev-type wintun'
-        // OpenVPN will automatically use the WinTun adapter when dev-type wintun is specified
-        // Do NOT add --dev on command line as it conflicts with config file settings
+        // For WinTun, explicitly specify both dev tun and dev-type wintun on command line
+        // This ensures OpenVPN uses WinTun and avoids conflicts
         if (currentDriver == DriverType::WINTUN) {
+            cmdStream << " --dev tun";
+            cmdStream << " --dev-type wintun";
             cmdStream << " --pull-filter ignore \"dev\"";
             cmdStream << " --pull-filter ignore \"dev-type\"";
-            std::cout << "DEBUG: Using WinTun driver - OpenVPN will auto-detect adapter from dev-type wintun" << std::endl;
-            std::cout << "DEBUG: Config file has 'dev tun' and 'dev-type wintun' - OpenVPN will use these" << std::endl;
-            std::cout << "DEBUG: Added pull-filter to ignore server dev/dev-type (using config file values)" << std::endl;
+            std::cout << "DEBUG: Using WinTun driver - specified --dev tun --dev-type wintun on command line" << std::endl;
+            std::cout << "DEBUG: Config file also has 'dev tun' and 'dev-type wintun' for consistency" << std::endl;
+            std::cout << "DEBUG: Added pull-filter to ignore server dev/dev-type (using command line values)" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
