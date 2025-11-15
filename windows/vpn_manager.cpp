@@ -326,8 +326,8 @@ bool VPNManager::initializeWinTun() {
         std::cout << "Running: " << cmdLine << std::endl;
         
         STARTUPINFOA startupInfo;
-        PROCESS_INFORMATION processInfo;
-        ZeroMemory(&processInfo, sizeof(processInfo));
+        PROCESS_INFORMATION tapctlProcessInfo;
+        ZeroMemory(&tapctlProcessInfo, sizeof(tapctlProcessInfo));
         ZeroMemory(&startupInfo, sizeof(startupInfo));
         startupInfo.cb = sizeof(startupInfo);
         startupInfo.dwFlags = STARTF_USESHOWWINDOW;
@@ -343,15 +343,15 @@ bool VPNManager::initializeWinTun() {
             NULL,
             NULL,
             &startupInfo,
-            &processInfo
+            &tapctlProcessInfo
         );
         
         if (success) {
-            WaitForSingleObject(processInfo.hProcess, 5000); // Wait up to 5 seconds
+            WaitForSingleObject(tapctlProcessInfo.hProcess, 5000); // Wait up to 5 seconds
             DWORD exitCode;
-            if (GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
-                CloseHandle(processInfo.hProcess);
-                CloseHandle(processInfo.hThread);
+            if (GetExitCodeProcess(tapctlProcessInfo.hProcess, &exitCode)) {
+                CloseHandle(tapctlProcessInfo.hProcess);
+                CloseHandle(tapctlProcessInfo.hThread);
                 
                 if (exitCode == 0) {
                     std::cout << "Successfully created WinTun adapter using tapctl.exe" << std::endl;
@@ -361,8 +361,8 @@ bool VPNManager::initializeWinTun() {
                     std::cout << "tapctl.exe exited with code: " << exitCode << ", falling back to programmatic creation" << std::endl;
                 }
             } else {
-                CloseHandle(processInfo.hProcess);
-                CloseHandle(processInfo.hThread);
+                CloseHandle(tapctlProcessInfo.hProcess);
+                CloseHandle(tapctlProcessInfo.hThread);
                 std::cout << "Could not get tapctl.exe exit code, falling back to programmatic creation" << std::endl;
             }
         } else {
