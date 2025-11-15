@@ -626,10 +626,61 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
             modifiedConfig.erase(pos, endPos - pos + 1);
         }
         
-        // Use config as-is from API - don't modify it
+        // When using WinTun, remove 'dev tun' or 'dev tap' lines as they conflict with --dev-type wintun
+        if (currentDriver == DriverType::WINTUN) {
+            pos = 0;
+            while ((pos = modifiedConfig.find("dev tun", pos)) != std::string::npos) {
+                size_t lineStart = modifiedConfig.rfind('\n', pos);
+                if (lineStart == std::string::npos) lineStart = 0;
+                else lineStart++;
+                
+                size_t lineEnd = modifiedConfig.find('\n', pos);
+                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
+                else lineEnd++;
+                
+                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
+                if (line.find("dev tun") != std::string::npos && 
+                    line.find('#') == std::string::npos && 
+                    line.find("dev-type") == std::string::npos) {
+                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
+                    pos = lineStart;
+                    std::cout << "Removed 'dev tun' line for WinTun compatibility" << std::endl;
+                } else {
+                    pos = lineEnd;
+                }
+            }
+            
+            // Also remove 'dev tap' lines
+            pos = 0;
+            while ((pos = modifiedConfig.find("dev tap", pos)) != std::string::npos) {
+                size_t lineStart = modifiedConfig.rfind('\n', pos);
+                if (lineStart == std::string::npos) lineStart = 0;
+                else lineStart++;
+                
+                size_t lineEnd = modifiedConfig.find('\n', pos);
+                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
+                else lineEnd++;
+                
+                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
+                if (line.find("dev tap") != std::string::npos && 
+                    line.find('#') == std::string::npos && 
+                    line.find("dev-type") == std::string::npos) {
+                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
+                    pos = lineStart;
+                    std::cout << "Removed 'dev tap' line for WinTun compatibility" << std::endl;
+                } else {
+                    pos = lineEnd;
+                }
+            }
+        }
+        
         configFile << modifiedConfig;
         
-        std::cout << "Using original config from API without modifications" << std::endl;
+        if (currentDriver == DriverType::WINTUN) {
+            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap directives)" << std::endl;
+        } else {
+            std::cout << "Using original config from API without modifications" << std::endl;
+        }
         std::cout << "Config preview (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
         
         if (!username.empty() && !password.empty()) {
