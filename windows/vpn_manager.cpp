@@ -97,10 +97,15 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         
         // Specify device type based on driver
         if (currentDriver == DriverType::WINTUN) {
-            cmdStream << " --dev-type wintun";
-            std::cout << "Using WinTun driver for OpenVPN connection" << std::endl;
+            // Get the WinTun adapter name
+            std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
+            cmdStream << " --dev-type wintun --dev \"" << adapterName << "\"";
+            std::cout << "Using WinTun driver for OpenVPN connection with adapter: " << adapterName << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
+            if (!tapAdapterName.empty()) {
+                cmdStream << " --dev \"" << tapAdapterName << "\"";
+            }
             std::cout << "Using TAP-Windows driver for OpenVPN connection" << std::endl;
         }
         
