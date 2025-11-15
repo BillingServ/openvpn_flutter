@@ -95,17 +95,17 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         // Disable DCO to avoid netsh permission issues
         cmdStream << " --disable-dco";
         
-        // For WinTun, specify both dev-type and dev with the adapter name
-        // Ignore device-related options from server, but allow topology/ifconfig (server will send these)
+        // For WinTun, config file has 'dev tun' and 'dev-type wintun'
+        // Command line can specify adapter name, but dev-type is in config file
         if (currentDriver == DriverType::WINTUN) {
             std::string adapterName = wintunManager ? wintunManager->getAdapterName() : "OpenVPN-Flutter";
-            cmdStream << " --dev-type wintun --dev \"" << adapterName << "\"";
+            cmdStream << " --dev \"" << adapterName << "\"";
             cmdStream << " --pull-filter ignore \"dev\"";
             cmdStream << " --pull-filter ignore \"dev-type\"";
-            // Don't specify --topology subnet here - let server send it in PUSH_REPLY
             std::cout << "DEBUG: Using WinTun driver with adapter: " << adapterName << std::endl;
-            std::cout << "DEBUG: Command line will include: --dev-type wintun --dev \"" << adapterName << "\"" << std::endl;
-            std::cout << "DEBUG: Added pull-filter to ignore server dev/dev-type, allowing server to send topology/ifconfig" << std::endl;
+            std::cout << "DEBUG: Command line will include: --dev \"" << adapterName << "\"" << std::endl;
+            std::cout << "DEBUG: Config file has 'dev tun' and 'dev-type wintun' - OpenVPN will use these" << std::endl;
+            std::cout << "DEBUG: Added pull-filter to ignore server dev/dev-type (using config file values)" << std::endl;
         } else if (currentDriver == DriverType::TAP_WINDOWS) {
             cmdStream << " --dev-type tap";
             if (!tapAdapterName.empty()) {
@@ -313,13 +313,73 @@ bool VPNManager::initializeWinTun() {
         return false;
     }
     
-    // Create WinTun adapter
+    // Try using tapctl.exe first (OpenVPN 2.6.14+ preferred method)
+    std::string tapctlPath = findBundledExecutable("tapctl.exe");
+    if (!tapctlPath.empty()) {
+        std::cout << "Found tapctl.exe, attempting to create WinTun adapter using tapctl..." << std::endl;
+        std::string adapterName = "OpenVPN-Flutter";
+        
+        // Run: tapctl.exe create --hwid wintun --name "OpenVPN-Flutter"
+        std::ostringstream cmdStream;
+        cmdStream << "\"" << tapctlPath << "\" create --hwid wintun --name \"" << adapterName << "\"";
+        std::string cmdLine = cmdStream.str();
+        std::cout << "Running: " << cmdLine << std::endl;
+        
+        STARTUPINFOA startupInfo;
+        PROCESS_INFORMATION processInfo;
+        ZeroMemory(&processInfo, sizeof(processInfo));
+        ZeroMemory(&startupInfo, sizeof(startupInfo));
+        startupInfo.cb = sizeof(startupInfo);
+        startupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        startupInfo.wShowWindow = SW_HIDE;
+        
+        BOOL success = CreateProcessA(
+            NULL,
+            (LPSTR)cmdLine.c_str(),
+            NULL,
+            NULL,
+            FALSE,
+            0,
+            NULL,
+            NULL,
+            &startupInfo,
+            &processInfo
+        );
+        
+        if (success) {
+            WaitForSingleObject(processInfo.hProcess, 5000); // Wait up to 5 seconds
+            DWORD exitCode;
+            if (GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
+                CloseHandle(processInfo.hProcess);
+                CloseHandle(processInfo.hThread);
+                
+                if (exitCode == 0) {
+                    std::cout << "Successfully created WinTun adapter using tapctl.exe" << std::endl;
+                    std::cout << "WinTun driver initialized successfully" << std::endl;
+                    return true;
+                } else {
+                    std::cout << "tapctl.exe exited with code: " << exitCode << ", falling back to programmatic creation" << std::endl;
+                }
+            } else {
+                CloseHandle(processInfo.hProcess);
+                CloseHandle(processInfo.hThread);
+                std::cout << "Could not get tapctl.exe exit code, falling back to programmatic creation" << std::endl;
+            }
+        } else {
+            DWORD error = GetLastError();
+            std::cout << "Failed to run tapctl.exe (error " << error << "), falling back to programmatic creation" << std::endl;
+        }
+    } else {
+        std::cout << "tapctl.exe not found, using programmatic adapter creation" << std::endl;
+    }
+    
+    // Fallback: Create WinTun adapter programmatically
     if (!wintunManager->createAdapter("OpenVPN-Flutter")) {
-        std::cerr << "Failed to create WinTun adapter" << std::endl;
+        std::cerr << "Failed to create WinTun adapter programmatically" << std::endl;
         return false;
     }
     
-    std::cout << "WinTun driver initialized successfully" << std::endl;
+    std::cout << "WinTun driver initialized successfully (programmatic creation)" << std::endl;
     return true;
 }
 
@@ -459,6 +519,8 @@ std::string VPNManager::findBundledExecutable(const std::string& filename) {
         // Direct bundle locations
         appDir + "\\bin\\" + filename,
         appDir + "\\drivers\\" + filename,
+        appDir + "\\openvpn_bundle\\bin\\" + filename,
+        appDir + "\\openvpn_bundle\\" + filename,
         appDir + "\\" + filename,
         // Plugin asset locations
         appDir + "\\..\\..\\..\\windows\\runner\\bin\\" + filename,
@@ -647,31 +709,10 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
             modifiedConfig.erase(pos, endPos - pos + 1);
         }
         
-        // When using WinTun, remove 'dev tun' or 'dev tap' lines as they conflict with --dev-type wintun
+        // When using WinTun, we need BOTH 'dev tun' AND 'dev-type wintun' in config
+        // Based on OpenVPN 2.6.14 documentation, WinTun requires both directives
         if (currentDriver == DriverType::WINTUN) {
-            pos = 0;
-            while ((pos = modifiedConfig.find("dev tun", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++;
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++;
-                
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("dev tun") != std::string::npos && 
-                    line.find('#') == std::string::npos && 
-                    line.find("dev-type") == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart;
-                    std::cout << "Removed 'dev tun' line for WinTun compatibility" << std::endl;
-                } else {
-                    pos = lineEnd;
-                }
-            }
-            
-            // Also remove 'dev tap' lines
+            // Remove 'dev tap' lines (we need 'dev tun' instead)
             pos = 0;
             while ((pos = modifiedConfig.find("dev tap", pos)) != std::string::npos) {
                 size_t lineStart = modifiedConfig.rfind('\n', pos);
@@ -684,14 +725,30 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
                 
                 std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
                 if (line.find("dev tap") != std::string::npos && 
-                    line.find('#') == std::string::npos && 
-                    line.find("dev-type") == std::string::npos) {
+                    line.find('#') == std::string::npos) {
                     modifiedConfig.erase(lineStart, lineEnd - lineStart);
                     pos = lineStart;
-                    std::cout << "Removed 'dev tap' line for WinTun compatibility" << std::endl;
+                    std::cout << "Removed 'dev tap' line - will use 'dev tun' for WinTun" << std::endl;
                 } else {
                     pos = lineEnd;
                 }
+            }
+            
+            // Ensure 'dev tun' exists (don't remove it - WinTun needs it!)
+            if (modifiedConfig.find("dev tun") == std::string::npos) {
+                // Add 'dev tun' after 'remote' line
+                size_t insertPos = modifiedConfig.find("remote ");
+                if (insertPos != std::string::npos) {
+                    size_t remoteLineEnd = modifiedConfig.find('\n', insertPos);
+                    if (remoteLineEnd != std::string::npos) {
+                        modifiedConfig.insert(remoteLineEnd + 1, "dev tun\n");
+                        std::cout << "Added 'dev tun' to config file for WinTun" << std::endl;
+                    }
+                } else {
+                    modifiedConfig = "dev tun\n" + modifiedConfig;
+                }
+            } else {
+                std::cout << "Found 'dev tun' in config - keeping it for WinTun" << std::endl;
             }
             
             // Remove 'persist-tun' as it may conflict with WinTun
@@ -716,12 +773,7 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
                 }
             }
             
-            // DEBUG: Check for any remaining dev-related directives
-            std::cout << "DEBUG: Checking for remaining dev-related directives..." << std::endl;
-            if (modifiedConfig.find("dev ") != std::string::npos) {
-                std::cout << "WARNING: Found 'dev ' directive still in config after removal attempt" << std::endl;
-            }
-            // Remove any existing dev-type directives - we'll use command line only
+            // Remove any existing dev-type directives and add 'dev-type wintun'
             if (modifiedConfig.find("dev-type") != std::string::npos) {
                 std::cout << "INFO: Found existing 'dev-type' directive in config, removing it" << std::endl;
                 pos = 0;
@@ -746,15 +798,22 @@ bool VPNManager::createConfigFile(const std::string& config, const std::string& 
                 }
             }
             
-            // Don't add dev-type wintun to config file - use command line only to avoid conflicts
-            std::cout << "DEBUG: Not adding dev-type to config file - using command line arguments only" << std::endl;
+            // Add 'dev-type wintun' after 'dev tun'
+            size_t devTunPos = modifiedConfig.find("dev tun");
+            if (devTunPos != std::string::npos) {
+                size_t devTunLineEnd = modifiedConfig.find('\n', devTunPos);
+                if (devTunLineEnd != std::string::npos) {
+                    modifiedConfig.insert(devTunLineEnd + 1, "dev-type wintun\n");
+                    std::cout << "Added 'dev-type wintun' to config file after 'dev tun'" << std::endl;
+                }
+            }
         }
         
         configFile << modifiedConfig;
         
         if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Modified config for WinTun compatibility (removed dev tun/tap/persist-tun/dev-type)" << std::endl;
-            std::cout << "DEBUG: Final config file has NO dev-type - using command line arguments only" << std::endl;
+            std::cout << "Modified config for WinTun compatibility (kept 'dev tun', added 'dev-type wintun', removed persist-tun)" << std::endl;
+            std::cout << "DEBUG: Final config file has 'dev tun' and 'dev-type wintun' as required for WinTun" << std::endl;
         } else {
             std::cout << "Using original config from API without modifications" << std::endl;
         }
