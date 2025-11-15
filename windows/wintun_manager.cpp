@@ -289,71 +289,106 @@ bool WinTunManager::loadWinTunFunctions() {
     
     // Try loading with both ANSI and Unicode function name variants
     // Some DLLs export functions with different name formats
-    const char* functionNames[] = {
-        "WinTunCreateAdapter",
+    // NOTE: The actual DLL exports use "Wintun" (lowercase 'i'), not "WinTun" (uppercase 'T')
+    const char* createAdapterNames[] = {
+        "WintunCreateAdapter",      // Actual export name (lowercase 'i')
+        "WinTunCreateAdapter",       // Standard name (uppercase 'T')
         "_WinTunCreateAdapter@12",  // __stdcall decorated name
+        "_WintunCreateAdapter@12",  // __stdcall decorated name (lowercase)
         "WinTunCreateAdapterA",     // ANSI variant
-        "WinTunCreateAdapterW"     // Unicode variant
+        "WinTunCreateAdapterW"      // Unicode variant
     };
     
     // Load required WinTun functions with detailed error reporting
-    WinTunCreateAdapter = reinterpret_cast<WINTUN_CREATE_ADAPTER_FUNC>(
-        GetProcAddress(wintunDll, "WinTunCreateAdapter"));
-    if (!WinTunCreateAdapter) {
-        // Try alternative names
-        for (int i = 1; i < 4 && !WinTunCreateAdapter; i++) {
-            WinTunCreateAdapter = reinterpret_cast<WINTUN_CREATE_ADAPTER_FUNC>(
-                GetProcAddress(wintunDll, functionNames[i]));
-            if (WinTunCreateAdapter) {
-                std::cout << "Found WinTunCreateAdapter with name: " << functionNames[i] << std::endl;
-                break;
-            }
+    WinTunCreateAdapter = nullptr;
+    for (const char* name : createAdapterNames) {
+        WinTunCreateAdapter = reinterpret_cast<WINTUN_CREATE_ADAPTER_FUNC>(
+            GetProcAddress(wintunDll, name));
+        if (WinTunCreateAdapter) {
+            std::cout << "Found WinTunCreateAdapter with name: " << name << std::endl;
+            break;
         }
     }
     if (!WinTunCreateAdapter) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunCreateAdapter. Error: " << error << std::endl;
-        std::cerr << "Tried names: WinTunCreateAdapter, _WinTunCreateAdapter@12, WinTunCreateAdapterA, WinTunCreateAdapterW" << std::endl;
+        std::cerr << "Tried names: WintunCreateAdapter, WinTunCreateAdapter, _WinTunCreateAdapter@12, _WintunCreateAdapter@12, WinTunCreateAdapterA, WinTunCreateAdapterW" << std::endl;
     }
     
+    // Try both case variants for CloseAdapter
     WinTunCloseAdapter = reinterpret_cast<WINTUN_CLOSE_ADAPTER_FUNC>(
-        GetProcAddress(wintunDll, "WinTunCloseAdapter"));
+        GetProcAddress(wintunDll, "WintunCloseAdapter"));
+    if (!WinTunCloseAdapter) {
+        WinTunCloseAdapter = reinterpret_cast<WINTUN_CLOSE_ADAPTER_FUNC>(
+            GetProcAddress(wintunDll, "WinTunCloseAdapter"));
+    }
     if (!WinTunCloseAdapter) {
         WinTunCloseAdapter = reinterpret_cast<WINTUN_CLOSE_ADAPTER_FUNC>(
             GetProcAddress(wintunDll, "_WinTunCloseAdapter@4"));
+    }
+    if (!WinTunCloseAdapter) {
+        WinTunCloseAdapter = reinterpret_cast<WINTUN_CLOSE_ADAPTER_FUNC>(
+            GetProcAddress(wintunDll, "_WintunCloseAdapter@4"));
     }
     if (!WinTunCloseAdapter) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunCloseAdapter. Error: " << error << std::endl;
     }
     
+    // Try both case variants for StartSession
     WinTunStartSession = reinterpret_cast<WINTUN_START_SESSION_FUNC>(
-        GetProcAddress(wintunDll, "WinTunStartSession"));
+        GetProcAddress(wintunDll, "WintunStartSession"));
+    if (!WinTunStartSession) {
+        WinTunStartSession = reinterpret_cast<WINTUN_START_SESSION_FUNC>(
+            GetProcAddress(wintunDll, "WinTunStartSession"));
+    }
     if (!WinTunStartSession) {
         WinTunStartSession = reinterpret_cast<WINTUN_START_SESSION_FUNC>(
             GetProcAddress(wintunDll, "_WinTunStartSession@8"));
+    }
+    if (!WinTunStartSession) {
+        WinTunStartSession = reinterpret_cast<WINTUN_START_SESSION_FUNC>(
+            GetProcAddress(wintunDll, "_WintunStartSession@8"));
     }
     if (!WinTunStartSession) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunStartSession. Error: " << error << std::endl;
     }
     
+    // Try both case variants for EndSession
     WinTunEndSession = reinterpret_cast<WINTUN_END_SESSION_FUNC>(
-        GetProcAddress(wintunDll, "WinTunEndSession"));
+        GetProcAddress(wintunDll, "WintunEndSession"));
+    if (!WinTunEndSession) {
+        WinTunEndSession = reinterpret_cast<WINTUN_END_SESSION_FUNC>(
+            GetProcAddress(wintunDll, "WinTunEndSession"));
+    }
     if (!WinTunEndSession) {
         WinTunEndSession = reinterpret_cast<WINTUN_END_SESSION_FUNC>(
             GetProcAddress(wintunDll, "_WinTunEndSession@4"));
+    }
+    if (!WinTunEndSession) {
+        WinTunEndSession = reinterpret_cast<WINTUN_END_SESSION_FUNC>(
+            GetProcAddress(wintunDll, "_WintunEndSession@4"));
     }
     if (!WinTunEndSession) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load WinTunEndSession. Error: " << error << std::endl;
     }
     
+    // Try both case variants for GetRunningDriverVersion
     WinTunGetRunningDriverVersion = reinterpret_cast<WINTUN_GET_RUNNING_DRIVER_VERSION_FUNC>(
-        GetProcAddress(wintunDll, "WinTunGetRunningDriverVersion"));
+        GetProcAddress(wintunDll, "WintunGetRunningDriverVersion"));
+    if (!WinTunGetRunningDriverVersion) {
+        WinTunGetRunningDriverVersion = reinterpret_cast<WINTUN_GET_RUNNING_DRIVER_VERSION_FUNC>(
+            GetProcAddress(wintunDll, "WinTunGetRunningDriverVersion"));
+    }
     if (!WinTunGetRunningDriverVersion) {
         WinTunGetRunningDriverVersion = reinterpret_cast<WINTUN_GET_RUNNING_DRIVER_VERSION_FUNC>(
             GetProcAddress(wintunDll, "_WinTunGetRunningDriverVersion@0"));
+    }
+    if (!WinTunGetRunningDriverVersion) {
+        WinTunGetRunningDriverVersion = reinterpret_cast<WINTUN_GET_RUNNING_DRIVER_VERSION_FUNC>(
+            GetProcAddress(wintunDll, "_WintunGetRunningDriverVersion@0"));
     }
     if (!WinTunGetRunningDriverVersion) {
         DWORD error = GetLastError();
