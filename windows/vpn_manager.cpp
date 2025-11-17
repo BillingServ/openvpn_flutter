@@ -167,6 +167,8 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             lastStatsTime = std::chrono::system_clock::time_point{};
             currentSpeedIn = 0.0;
             currentSpeedOut = 0.0;
+            smoothedSpeedIn = 0.0;
+            smoothedSpeedOut = 0.0;
             
             updateStatus("connecting");
             
@@ -207,6 +209,15 @@ void VPNManager::stopVPN() {
     isConnected = false;
     isConnecting = false;
     updateStatus("disconnected");
+    
+    // Reset speed tracking on disconnect
+    lastBytesIn = 0;
+    lastBytesOut = 0;
+    lastStatsTime = std::chrono::system_clock::time_point{};
+    currentSpeedIn = 0.0;
+    currentSpeedOut = 0.0;
+    smoothedSpeedIn = 0.0;
+    smoothedSpeedOut = 0.0;
     
     cleanupTempFiles();
 }
@@ -1030,6 +1041,8 @@ void VPNManager::updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, co
         lastStatsTime = now;
         currentSpeedIn = 0.0;
         currentSpeedOut = 0.0;
+        smoothedSpeedIn = 0.0;
+        smoothedSpeedOut = 0.0;
         return;
     }
     
@@ -1037,22 +1050,22 @@ void VPNManager::updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, co
     auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastStatsTime);
     double timeDiffSeconds = timeDiff.count() / 1000.0;
     
-    // Only calculate if enough time has passed (at least 25ms for ultra-responsive updates)
-    if (timeDiffSeconds >= 0.025) {
+    // Only calculate if enough time has passed (at least 100ms for accurate speed calculation)
+    // This prevents division by very small numbers and reduces jitter
+    if (timeDiffSeconds >= 0.1) {
         // Calculate byte differences
         uint64_t byteInDiff = bytesIn - lastBytesIn;
         uint64_t byteOutDiff = bytesOut - lastBytesOut;
         
-        // Calculate speeds (bytes per second)
-        currentSpeedIn = byteInDiff / timeDiffSeconds;
-        currentSpeedOut = byteOutDiff / timeDiffSeconds;
+        // Calculate raw speeds (bytes per second)
+        double rawSpeedIn = byteInDiff / timeDiffSeconds;
+        double rawSpeedOut = byteOutDiff / timeDiffSeconds;
         
-        // Smooth the speeds with exponential moving average to reduce jitter (ultra-responsive)
-        static double smoothedSpeedIn = 0.0;
-        static double smoothedSpeedOut = 0.0;
-        
-        smoothedSpeedIn = (smoothedSpeedIn * 0.1) + (currentSpeedIn * 0.9);
-        smoothedSpeedOut = (smoothedSpeedOut * 0.1) + (currentSpeedOut * 0.9);
+        // Smooth the speeds with exponential moving average to reduce jitter
+        // Use member variables instead of static to reset properly on disconnect
+        // Weight: 70% new value, 30% old value for responsive but stable speeds
+        smoothedSpeedIn = (smoothedSpeedIn * 0.3) + (rawSpeedIn * 0.7);
+        smoothedSpeedOut = (smoothedSpeedOut * 0.3) + (rawSpeedOut * 0.7);
         
         currentSpeedIn = smoothedSpeedIn;
         currentSpeedOut = smoothedSpeedOut;

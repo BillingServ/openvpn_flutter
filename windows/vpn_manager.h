@@ -58,6 +58,8 @@ private:
     std::chrono::system_clock::time_point lastStatsTime;
     double currentSpeedIn = 0.0;  // bytes per second
     double currentSpeedOut = 0.0; // bytes per second
+    double smoothedSpeedIn = 0.0;  // smoothed speed for download
+    double smoothedSpeedOut = 0.0; // smoothed speed for upload
     
 public:
     VPNManager();

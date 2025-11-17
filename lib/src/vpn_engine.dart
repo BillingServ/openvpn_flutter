@@ -246,7 +246,24 @@ class OpenVPN {
           } else if (Platform.isWindows || Platform.isLinux) {
             // Desktop platforms - return mock data or parse JSON if available
             try {
+              print('🔍 OpenVPN Plugin: Parsing Windows JSON status...');
+              print('   Raw JSON value type: ${value.runtimeType}');
+              print('   Raw JSON value: $value');
+              print('   Raw JSON value length: ${value.toString().length}');
+              
               var data = jsonDecode(value);
+              print('   ✅ JSON decoded successfully');
+              print('   Parsed JSON type: ${data.runtimeType}');
+              print('   Parsed JSON keys: ${data.keys.toList()}');
+              
+              // Log all keys and values
+              if (data is Map) {
+                print('   All JSON fields:');
+                data.forEach((key, val) {
+                  print('     $key: $val (${val.runtimeType})');
+                });
+              }
+              
               var connectedOn = DateTime.tryParse(data["connected_on"]?.toString() ?? "") ?? 
                                _tempDateTime ?? 
                                DateTime.now();
@@ -254,15 +271,49 @@ class OpenVPN {
               String byteOut = data["byte_out"]?.toString() ?? "0";
               if (byteIn.trim().isEmpty) byteIn = "0";
               if (byteOut.trim().isEmpty) byteOut = "0";
-              return VpnStatus(
+              
+              // Extract speed fields from JSON (Windows C++ code provides these)
+              print('   Looking for speed_in_mbps in data...');
+              print('   data.containsKey("speed_in_mbps"): ${data.containsKey("speed_in_mbps")}');
+              print('   data["speed_in_mbps"]: ${data["speed_in_mbps"]}');
+              
+              String? speedIn = data["speed_in_mbps"]?.toString();
+              String? speedOut = data["speed_out_mbps"]?.toString();
+              
+              print('   Extracted speedIn: $speedIn (type: ${speedIn.runtimeType})');
+              print('   Extracted speedOut: $speedOut (type: ${speedOut.runtimeType})');
+              
+              // Handle null or empty string cases
+              if (speedIn != null && (speedIn == 'null' || speedIn.isEmpty)) {
+                print('   Converting speedIn from "$speedIn" to null');
+                speedIn = null;
+              }
+              if (speedOut != null && (speedOut == 'null' || speedOut.isEmpty)) {
+                print('   Converting speedOut from "$speedOut" to null');
+                speedOut = null;
+              }
+              
+              print('   Final speedIn: $speedIn');
+              print('   Final speedOut: $speedOut');
+              
+              final vpnStatus = VpnStatus(
                 connectedOn: connectedOn,
                 duration: _duration(DateTime.now().difference(connectedOn).abs()),
                 byteIn: byteIn,
                 byteOut: byteOut,
                 packetsIn: byteIn,
                 packetsOut: byteOut,
+                speedIn: speedIn,
+                speedOut: speedOut,
               );
-            } catch (e) {
+              
+              print('   ✅ Created VpnStatus with speeds: speedIn=${vpnStatus.speedIn}, speedOut=${vpnStatus.speedOut}');
+              return vpnStatus;
+            } catch (e, stackTrace) {
+              print('❌ OpenVPN Plugin: ERROR parsing Windows JSON status!');
+              print('   Error: $e');
+              print('   Stack trace: $stackTrace');
+              print('   Value that failed: $value');
               // Fallback to empty status for desktop platforms
               return VpnStatus.empty();
             }
@@ -390,11 +441,16 @@ class OpenVPN {
     _vpnStatusTimer ??=
         Timer.periodic(const Duration(seconds: 1), (timer) async {
       try {
+        print('🔧 OpenVPN Plugin: Timer tick - calling status()...');
         final vpnStatus = await status();
         print('🔧 OpenVPN Plugin: Timer status update: ${vpnStatus.toJson()}');
+        print('🔧 OpenVPN Plugin: VpnStatus speeds - speedIn=${vpnStatus.speedIn}, speedOut=${vpnStatus.speedOut}');
+        print('🔧 OpenVPN Plugin: Calling onVpnStatusChanged callback...');
         onVpnStatusChanged?.call(vpnStatus);
+        print('🔧 OpenVPN Plugin: onVpnStatusChanged callback completed');
       } catch (e) {
         print('❌ OpenVPN Plugin: Error getting status in timer: $e');
+        print('❌ Stack trace: ${StackTrace.current}');
       }
     });
   }
