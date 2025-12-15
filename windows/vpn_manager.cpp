@@ -485,13 +485,15 @@ std::string VPNManager::getBundledOpenVPNPath() {
     std::string appDir = getAppDirectory();
     
     std::vector<std::string> possiblePaths = {
+        // Installed app locations (most common for installed apps)
+        appDir + "\\openvpn_bundle\\bin\\openvpn.exe",
+        appDir + "\\bin\\openvpn.exe",
+        appDir + "\\openvpn.exe",
         // Flutter build output locations
         appDir + "\\data\\flutter_assets\\windows\\bin\\openvpn.exe",
         appDir + "\\data\\flutter_assets\\bin\\openvpn.exe",
         // Direct bundle locations
-        appDir + "\\bin\\openvpn.exe",
         appDir + "\\openvpn\\openvpn.exe",
-        appDir + "\\openvpn.exe",
         // Plugin asset locations  
         appDir + "\\..\\..\\..\\windows\\runner\\bin\\openvpn.exe",
         // Development locations
