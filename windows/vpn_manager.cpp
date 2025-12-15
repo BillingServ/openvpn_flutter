@@ -656,6 +656,7 @@ std::string VPNManager::findBundledExecutable(const std::string& filename) {
 }
 
 void VPNManager::monitorConnection() {
+    logToFile("Monitor thread started");
     int connectionAttempts = 0;
     const int maxConnectionAttempts = 300; // 30 seconds
     int connectedStableCount = 0;
@@ -668,6 +669,11 @@ void VPNManager::monitorConnection() {
                 if (isConnecting) {
                     connectionAttempts++;
                     
+                    // Log every 50 attempts (5 seconds)
+                    if (connectionAttempts % 50 == 0) {
+                        logToFile("Monitor: connectionAttempts=" + std::to_string(connectionAttempts) + ", checking connection...");
+                    }
+                    
                     // Check if OpenVPN process is running and stable
                     if (connectionAttempts > 50) { // Give 5 seconds for process to start
                         // Try to detect actual connection by checking for network adapter changes
@@ -676,20 +682,26 @@ void VPNManager::monitorConnection() {
                         
                         if (connectionDetected) {
                             connectedStableCount++;
+                            if (connectedStableCount == 1) {
+                                logToFile("Monitor: Connection detected! Waiting for stability...");
+                            }
                             if (connectedStableCount >= requiredStableCount) {
                                 isConnecting = false;
                                 isConnected = true;
                                 updateStatusThreadSafe("connected");
-                                std::cout << "VPN connection established successfully" << std::endl;
+                                logToFile("Monitor: VPN connection established successfully!");
                             }
                         } else {
+                            if (connectedStableCount > 0) {
+                                logToFile("Monitor: Connection unstable, resetting counter");
+                            }
                             connectedStableCount = 0; // Reset counter if connection not stable
                         }
                     }
                     
                     if (connectionAttempts > maxConnectionAttempts) {
+                        logToFile("Monitor: Connection timeout after " + std::to_string(connectionAttempts) + " attempts");
                         updateStatusThreadSafe("error");
-                        std::cerr << "VPN connection timeout" << std::endl;
                         break;
                     }
                 } else if (isConnected) {
@@ -698,12 +710,13 @@ void VPNManager::monitorConnection() {
                         // Connection lost
                         isConnected = false;
                         updateStatusThreadSafe("disconnected");
-                        std::cout << "VPN connection lost" << std::endl;
+                        logToFile("Monitor: VPN connection lost");
                         break;
                     }
                 }
             } else {
                 // Process exited
+                logToFile("Monitor: OpenVPN process exited with code " + std::to_string(exitCode));
                 isConnected = false;
                 isConnecting = false;
                 updateStatusThreadSafe("disconnected");
@@ -724,18 +737,48 @@ void VPNManager::monitorConnection() {
 }
 
 bool VPNManager::checkConnectionStatus() {
-    // Simple heuristic: check if we have a VPN adapter with an IP address
-    // This is a basic implementation - in production you might want to:
-    // 1. Parse OpenVPN management interface
-    // 2. Check for specific network routes
-    // 3. Ping VPN gateway
+    // Check if we have a VPN adapter with an IP address in the VPN range (10.x.x.x)
+    // This works for both WinTun and TAP adapters created by OpenVPN
     
-    if (currentDriver == DriverType::WINTUN) {
-        // For WinTun, check if adapter has IP assignment
-        return wintunManager && !wintunManager->getAdapterName().empty();
-    } else if (currentDriver == DriverType::TAP_WINDOWS) {
-        // For TAP, check if adapter is up and has IP
-        return !tapAdapterName.empty() && checkTapAdapterStatus();
+    ULONG bufferSize = 0;
+    GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, NULL, &bufferSize);
+    
+    if (bufferSize > 0) {
+        std::vector<char> buffer(bufferSize);
+        PIP_ADAPTER_ADDRESSES adapters = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
+        
+        if (GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, adapters, &bufferSize) == NO_ERROR) {
+            for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL; adapter = adapter->Next) {
+                // Check if adapter is up and has an IP address
+                if (adapter->OperStatus == IfOperStatusUp && adapter->FirstUnicastAddress != NULL) {
+                    // Check if this is a TUN/TAP adapter (OpenVPN, WinTun, etc.)
+                    std::wstring description(adapter->Description);
+                    bool isVpnAdapter = (description.find(L"TAP") != std::wstring::npos ||
+                                        description.find(L"TUN") != std::wstring::npos ||
+                                        description.find(L"Wintun") != std::wstring::npos ||
+                                        description.find(L"OpenVPN") != std::wstring::npos);
+                    
+                    if (isVpnAdapter) {
+                        // Check if the IP address is in a typical VPN range (10.x.x.x or 172.16-31.x.x)
+                        for (PIP_ADAPTER_UNICAST_ADDRESS addr = adapter->FirstUnicastAddress; addr != NULL; addr = addr->Next) {
+                            if (addr->Address.lpSockaddr->sa_family == AF_INET) {
+                                struct sockaddr_in* sockaddr = (struct sockaddr_in*)addr->Address.lpSockaddr;
+                                unsigned char* ip = (unsigned char*)&sockaddr->sin_addr;
+                                
+                                // Check for 10.x.x.x (common VPN range)
+                                if (ip[0] == 10) {
+                                    return true;
+                                }
+                                // Check for 172.16.x.x - 172.31.x.x (VPN range)
+                                if (ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
     return false;
