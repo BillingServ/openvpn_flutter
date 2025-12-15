@@ -44,7 +44,18 @@ void VPNManager::setEventSink(flutter::EventSink<flutter::EncodableValue>* sink)
 }
 
 bool VPNManager::startVPN(const std::string& config, const std::string& username, const std::string& password) {
+    // CRITICAL: Clear any pending status updates from previous connection
+    // This prevents stale "disconnected" updates from overriding the new "connecting" status
+    {
+        std::lock_guard<std::mutex> lock(statusMutex);
+        while (!pendingStatusUpdates.empty()) {
+            std::cout << "Clearing stale pending status: " << pendingStatusUpdates.front() << std::endl;
+            pendingStatusUpdates.pop();
+        }
+    }
+    
     if (isConnected || isConnecting) {
+        std::cout << "startVPN: Already connected or connecting, returning false" << std::endl;
         return false;
     }
     
@@ -203,23 +214,45 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
 }
 
 void VPNManager::stopVPN() {
+    std::cout << "stopVPN: Starting disconnect process..." << std::endl;
+    
+    // Signal the monitor thread to stop
     shouldMonitor = false;
     
+    // Wait for the monitoring thread to finish
     if (statusMonitorThread.joinable()) {
+        std::cout << "stopVPN: Waiting for monitor thread to finish..." << std::endl;
         statusMonitorThread.join();
+        std::cout << "stopVPN: Monitor thread finished" << std::endl;
     }
     
+    // Terminate OpenVPN process if running
     if (hProcess) {
+        std::cout << "stopVPN: Terminating OpenVPN process..." << std::endl;
         TerminateProcess(hProcess, 0);
         WaitForSingleObject(hProcess, 5000);
         CloseHandle(hProcess);
         CloseHandle(processInfo.hThread);
         hProcess = NULL;
         ZeroMemory(&processInfo, sizeof(processInfo));
+        std::cout << "stopVPN: OpenVPN process terminated" << std::endl;
     }
     
+    // CRITICAL: Clear all connection state flags
     isConnected = false;
     isConnecting = false;
+    
+    // CRITICAL: Clear any pending status updates from the monitor thread
+    // These might contain stale "disconnected" or "connecting" states
+    {
+        std::lock_guard<std::mutex> lock(statusMutex);
+        while (!pendingStatusUpdates.empty()) {
+            std::cout << "stopVPN: Clearing pending status: " << pendingStatusUpdates.front() << std::endl;
+            pendingStatusUpdates.pop();
+        }
+    }
+    
+    // Now send the final disconnected status
     updateStatus("disconnected");
     
     // Reset speed tracking on disconnect
@@ -232,6 +265,7 @@ void VPNManager::stopVPN() {
     smoothedSpeedOut = 0.0;
     
     cleanupTempFiles();
+    std::cout << "stopVPN: Disconnect complete, ready for new connection" << std::endl;
 }
 
 std::string VPNManager::getStatus() {
