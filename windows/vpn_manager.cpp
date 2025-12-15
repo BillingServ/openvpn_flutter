@@ -427,88 +427,116 @@ bool VPNManager::initializeWinTun() {
         return false;
     }
     
-    // SIMPLIFIED: Don't pre-create a WinTun adapter - let OpenVPN create its own
-    // OpenVPN 2.6+ with "windows-driver wintun" in config handles adapter creation itself
-    // Pre-creating an adapter can cause conflicts, especially after WireGuard has used WinTun
-    logToFile("WinTun driver available - OpenVPN will create its own adapter");
-    std::cout << "WinTun driver initialized successfully (OpenVPN will create adapter)" << std::endl;
-    return true;
-    
-    /* DISABLED: Pre-creating adapter causes conflicts with WireGuard
-    // Try using tapctl.exe first (OpenVPN 2.6.14+ preferred method)
+    // Try using tapctl.exe (OpenVPN 2.6.14+ preferred method)
     std::string tapctlPath = findBundledExecutable("tapctl.exe");
+    std::string appDir = getAppDirectory();
+    std::string adapterName = "OpenVPN-Flutter";
+    
     if (!tapctlPath.empty()) {
-        std::cout << "Found tapctl.exe, attempting to create WinTun adapter using tapctl..." << std::endl;
-        std::string adapterName = "OpenVPN-Flutter";
+        logToFile("Found tapctl.exe at: " + tapctlPath);
         
-        // Run: tapctl.exe create --hwid wintun --name "OpenVPN-Flutter"
-        std::ostringstream cmdStream;
-        cmdStream << "\"" << tapctlPath << "\" create --hwid wintun --name \"" << adapterName << "\"";
-        std::string cmdLine = cmdStream.str();
-        std::cout << "Running: " << cmdLine << std::endl;
+        // CRITICAL: First DELETE any existing adapter to ensure clean state
+        // This is essential after WireGuard has been used, as there may be
+        // stale adapter state that prevents OpenVPN from working
+        std::ostringstream deleteStream;
+        deleteStream << "\"" << tapctlPath << "\" delete \"" << adapterName << "\"";
+        std::string deleteCmdLine = deleteStream.str();
+        logToFile("Cleaning up existing adapter: " + deleteCmdLine);
         
-        // CRITICAL: Set working directory to app directory for proper DLL loading
-        std::string appDir = getAppDirectory();
-        std::cout << "Working directory for tapctl: " << appDir << std::endl;
+        STARTUPINFOA deleteStartupInfo;
+        PROCESS_INFORMATION deleteProcessInfo;
+        ZeroMemory(&deleteProcessInfo, sizeof(deleteProcessInfo));
+        ZeroMemory(&deleteStartupInfo, sizeof(deleteStartupInfo));
+        deleteStartupInfo.cb = sizeof(deleteStartupInfo);
+        deleteStartupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        deleteStartupInfo.wShowWindow = SW_HIDE;
         
-        STARTUPINFOA startupInfo;
-        PROCESS_INFORMATION tapctlProcessInfo;
-        ZeroMemory(&tapctlProcessInfo, sizeof(tapctlProcessInfo));
-        ZeroMemory(&startupInfo, sizeof(startupInfo));
-        startupInfo.cb = sizeof(startupInfo);
-        startupInfo.dwFlags = STARTF_USESHOWWINDOW;
-        startupInfo.wShowWindow = SW_HIDE;
-        
-        BOOL success = CreateProcessA(
+        BOOL deleteSuccess = CreateProcessA(
             NULL,
-            (LPSTR)cmdLine.c_str(),
+            (LPSTR)deleteCmdLine.c_str(),
             NULL,
             NULL,
             FALSE,
             CREATE_NO_WINDOW,
             NULL,
-            appDir.c_str(),          // Set working directory to app dir
-            &startupInfo,
-            &tapctlProcessInfo
+            appDir.c_str(),
+            &deleteStartupInfo,
+            &deleteProcessInfo
         );
         
-        if (success) {
-            WaitForSingleObject(tapctlProcessInfo.hProcess, 5000); // Wait up to 5 seconds
-            DWORD exitCode;
-            if (GetExitCodeProcess(tapctlProcessInfo.hProcess, &exitCode)) {
-                CloseHandle(tapctlProcessInfo.hProcess);
-                CloseHandle(tapctlProcessInfo.hThread);
+        if (deleteSuccess) {
+            WaitForSingleObject(deleteProcessInfo.hProcess, 3000);
+            DWORD deleteExitCode = 0;
+            GetExitCodeProcess(deleteProcessInfo.hProcess, &deleteExitCode);
+            CloseHandle(deleteProcessInfo.hProcess);
+            CloseHandle(deleteProcessInfo.hThread);
+            logToFile("Adapter cleanup completed with exit code: " + std::to_string(deleteExitCode));
+            
+            // Small delay after deletion to ensure system has released resources
+            Sleep(500);
+        }
+        
+        // Now CREATE a fresh adapter
+        std::ostringstream createStream;
+        createStream << "\"" << tapctlPath << "\" create --hwid wintun --name \"" << adapterName << "\"";
+        std::string createCmdLine = createStream.str();
+        logToFile("Creating fresh adapter: " + createCmdLine);
+        
+        STARTUPINFOA createStartupInfo;
+        PROCESS_INFORMATION createProcessInfo;
+        ZeroMemory(&createProcessInfo, sizeof(createProcessInfo));
+        ZeroMemory(&createStartupInfo, sizeof(createStartupInfo));
+        createStartupInfo.cb = sizeof(createStartupInfo);
+        createStartupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        createStartupInfo.wShowWindow = SW_HIDE;
+        
+        BOOL createSuccess = CreateProcessA(
+            NULL,
+            (LPSTR)createCmdLine.c_str(),
+            NULL,
+            NULL,
+            FALSE,
+            CREATE_NO_WINDOW,
+            NULL,
+            appDir.c_str(),
+            &createStartupInfo,
+            &createProcessInfo
+        );
+        
+        if (createSuccess) {
+            WaitForSingleObject(createProcessInfo.hProcess, 5000);
+            DWORD createExitCode;
+            if (GetExitCodeProcess(createProcessInfo.hProcess, &createExitCode)) {
+                CloseHandle(createProcessInfo.hProcess);
+                CloseHandle(createProcessInfo.hThread);
                 
-                if (exitCode == 0) {
-                    std::cout << "Successfully created WinTun adapter using tapctl.exe" << std::endl;
-                    std::cout << "WinTun driver initialized successfully" << std::endl;
+                if (createExitCode == 0) {
+                    logToFile("Successfully created fresh WinTun adapter using tapctl.exe");
                     return true;
                 } else {
-                    std::cout << "tapctl.exe exited with code: " << exitCode << ", falling back to programmatic creation" << std::endl;
+                    logToFile("tapctl.exe create exited with code: " + std::to_string(createExitCode));
                 }
             } else {
-                CloseHandle(tapctlProcessInfo.hProcess);
-                CloseHandle(tapctlProcessInfo.hThread);
-                std::cout << "Could not get tapctl.exe exit code, falling back to programmatic creation" << std::endl;
+                CloseHandle(createProcessInfo.hProcess);
+                CloseHandle(createProcessInfo.hThread);
+                logToFile("Could not get tapctl.exe exit code");
             }
         } else {
             DWORD error = GetLastError();
-            std::cout << "Failed to run tapctl.exe (error " << error << "), falling back to programmatic creation" << std::endl;
+            logToFile("Failed to run tapctl.exe create (error " + std::to_string(error) + ")");
         }
     } else {
-        std::cout << "tapctl.exe not found, using programmatic adapter creation" << std::endl;
+        logToFile("tapctl.exe not found, using programmatic adapter creation");
     }
-    */
     
-    /* DISABLED: Programmatic adapter creation also causes conflicts
     // Fallback: Create WinTun adapter programmatically
-    if (!wintunManager->createAdapter("OpenVPN-Flutter")) {
-        std::cerr << "Failed to create WinTun adapter programmatically" << std::endl;
+    logToFile("Attempting programmatic adapter creation...");
+    if (!wintunManager->createAdapter(adapterName)) {
+        logToFile("Failed to create WinTun adapter programmatically");
         return false;
     }
     
-    std::cout << "WinTun driver initialized successfully (programmatic creation)" << std::endl;
-    */
+    logToFile("WinTun driver initialized successfully (programmatic creation)");
     return true;
 }
 
