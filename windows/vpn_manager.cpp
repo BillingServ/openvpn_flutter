@@ -300,6 +300,11 @@ void VPNManager::stopVPN() {
     isConnected = false;
     isConnecting = false;
     
+    // CRITICAL: Reset driver initialization flag so it will be re-initialized on next connect
+    // This ensures a fresh WinTun adapter is created, avoiding conflicts with WireGuard
+    driverInitialized = false;
+    logToFile("Driver initialization reset - will reinitialize on next connect");
+    
     // CRITICAL: Clear any pending status updates from the monitor thread
     // These might contain stale "disconnected" or "connecting" states
     {
@@ -323,7 +328,7 @@ void VPNManager::stopVPN() {
     smoothedSpeedOut = 0.0;
     
     cleanupTempFiles();
-    std::cout << "stopVPN: Disconnect complete, ready for new connection" << std::endl;
+    logToFile("stopVPN: Disconnect complete, driver will reinitialize on next connect");
 }
 
 std::string VPNManager::getStatus() {
@@ -406,20 +411,30 @@ bool VPNManager::initializeDriver() {
 }
 
 bool VPNManager::initializeWinTun() {
+    logToFile("initializeWinTun called");
+    
     if (!wintunManager) {
         wintunManager = std::make_unique<WinTunManager>();
     }
     
     if (!wintunManager->initialize()) {
-        std::cerr << "Failed to initialize WinTun manager" << std::endl;
+        logToFile("Failed to initialize WinTun manager");
         return false;
     }
     
     if (!wintunManager->isWinTunAvailable()) {
-        std::cerr << "WinTun is not available on this system" << std::endl;
+        logToFile("WinTun is not available on this system");
         return false;
     }
     
+    // SIMPLIFIED: Don't pre-create a WinTun adapter - let OpenVPN create its own
+    // OpenVPN 2.6+ with "windows-driver wintun" in config handles adapter creation itself
+    // Pre-creating an adapter can cause conflicts, especially after WireGuard has used WinTun
+    logToFile("WinTun driver available - OpenVPN will create its own adapter");
+    std::cout << "WinTun driver initialized successfully (OpenVPN will create adapter)" << std::endl;
+    return true;
+    
+    /* DISABLED: Pre-creating adapter causes conflicts with WireGuard
     // Try using tapctl.exe first (OpenVPN 2.6.14+ preferred method)
     std::string tapctlPath = findBundledExecutable("tapctl.exe");
     if (!tapctlPath.empty()) {
@@ -483,7 +498,9 @@ bool VPNManager::initializeWinTun() {
     } else {
         std::cout << "tapctl.exe not found, using programmatic adapter creation" << std::endl;
     }
+    */
     
+    /* DISABLED: Programmatic adapter creation also causes conflicts
     // Fallback: Create WinTun adapter programmatically
     if (!wintunManager->createAdapter("OpenVPN-Flutter")) {
         std::cerr << "Failed to create WinTun adapter programmatically" << std::endl;
@@ -491,6 +508,7 @@ bool VPNManager::initializeWinTun() {
     }
     
     std::cout << "WinTun driver initialized successfully (programmatic creation)" << std::endl;
+    */
     return true;
 }
 
