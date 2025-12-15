@@ -379,6 +379,7 @@ bool VPNManager::initializeWinTun() {
         // stale adapter state that prevents OpenVPN from working
         std::ostringstream deleteStream;
         deleteStream << "\"" << tapctlPath << "\" delete \"" << adapterName << "\"";
+        std::string deleteCmdLine = deleteStream.str();
         
         STARTUPINFOA deleteStartupInfo;
         PROCESS_INFORMATION deleteProcessInfo;
