@@ -139,8 +139,20 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         startupInfo.dwFlags = STARTF_USESHOWWINDOW;
         startupInfo.wShowWindow = SW_HIDE;
         
-        std::string fullCmdLine = "\"" + openVPNPath + "\" " + cmdLine.substr(cmdLine.find(' ') + 1);
+        // Build command line with all arguments
+        std::string fullCmdLine = "\"" + openVPNPath + "\" --config \"" + currentConfigPath + "\" --verb 3 --disable-dco";
+        if (currentDriver == DriverType::TAP_WINDOWS) {
+            fullCmdLine += " --dev-type tap";
+            if (!tapAdapterName.empty()) {
+                fullCmdLine += " --dev \"" + tapAdapterName + "\"";
+            }
+        }
         std::cout << "Full command line: " << fullCmdLine << std::endl;
+        
+        // CRITICAL: Set working directory to app directory for proper DLL loading
+        // When running as admin from a shortcut, the working dir might be System32
+        std::string appDir = getAppDirectory();
+        std::cout << "Working directory: " << appDir << std::endl;
         
         BOOL success = CreateProcessA(
             NULL,                     // Application name
@@ -148,9 +160,9 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             NULL,                     // Process security attributes
             NULL,                     // Thread security attributes
             FALSE,                    // Inherit handles
-            0,                        // Creation flags
+            CREATE_NO_WINDOW,         // Creation flags - hide console window
             NULL,                     // Environment
-            NULL,                     // Current directory
+            appDir.c_str(),          // Current directory - SET TO APP DIR!
             &startupInfo,            // Startup info
             &processInfo             // Process info
         );
@@ -328,6 +340,10 @@ bool VPNManager::initializeWinTun() {
         std::string cmdLine = cmdStream.str();
         std::cout << "Running: " << cmdLine << std::endl;
         
+        // CRITICAL: Set working directory to app directory for proper DLL loading
+        std::string appDir = getAppDirectory();
+        std::cout << "Working directory for tapctl: " << appDir << std::endl;
+        
         STARTUPINFOA startupInfo;
         PROCESS_INFORMATION tapctlProcessInfo;
         ZeroMemory(&tapctlProcessInfo, sizeof(tapctlProcessInfo));
@@ -342,9 +358,9 @@ bool VPNManager::initializeWinTun() {
             NULL,
             NULL,
             FALSE,
-            0,
+            CREATE_NO_WINDOW,
             NULL,
-            NULL,
+            appDir.c_str(),          // Set working directory to app dir
             &startupInfo,
             &tapctlProcessInfo
         );
