@@ -6,6 +6,7 @@
 #include <iphlpapi.h>
 #include <netioapi.h>
 #include <ifdef.h>
+#include <shlobj.h>
 
 #include "vpn_manager.h"
 #include <fstream>
@@ -27,6 +28,39 @@
 
 namespace openvpn_flutter {
 
+// File-based logging for debugging
+static void logToFile(const std::string& message) {
+    static std::string logPath;
+    if (logPath.empty()) {
+        wchar_t path[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, SHGFP_TYPE_CURRENT, path))) {
+            char narrowPath[MAX_PATH];
+            WideCharToMultiByte(CP_UTF8, 0, path, -1, narrowPath, MAX_PATH, NULL, NULL);
+            logPath = std::string(narrowPath) + "\\BSVPN\\openvpn_debug.log";
+            
+            // Ensure directory exists
+            std::string dirPath = std::string(narrowPath) + "\\BSVPN";
+            CreateDirectoryA(dirPath.c_str(), NULL);
+        } else {
+            logPath = "C:\\openvpn_debug.log";
+        }
+    }
+    
+    std::ofstream logFile(logPath, std::ios::app);
+    if (logFile.is_open()) {
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        struct tm tm;
+        localtime_s(&tm, &time);
+        
+        logFile << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "] " << message << std::endl;
+        logFile.close();
+    }
+    
+    // Also output to console for debugging
+    std::cout << message << std::endl;
+}
+
 VPNManager::VPNManager() {
     ZeroMemory(&processInfo, sizeof(processInfo));
     wintunManager = std::make_unique<WinTunManager>();
@@ -44,56 +78,73 @@ void VPNManager::setEventSink(flutter::EventSink<flutter::EncodableValue>* sink)
 }
 
 bool VPNManager::startVPN(const std::string& config, const std::string& username, const std::string& password) {
+    logToFile("=== startVPN called ===");
+    logToFile("isConnected: " + std::string(isConnected ? "true" : "false"));
+    logToFile("isConnecting: " + std::string(isConnecting ? "true" : "false"));
+    
     // CRITICAL: Clear any pending status updates from previous connection
     // This prevents stale "disconnected" updates from overriding the new "connecting" status
     {
         std::lock_guard<std::mutex> lock(statusMutex);
         while (!pendingStatusUpdates.empty()) {
-            std::cout << "Clearing stale pending status: " << pendingStatusUpdates.front() << std::endl;
+            logToFile("Clearing stale pending status: " + pendingStatusUpdates.front());
             pendingStatusUpdates.pop();
         }
     }
     
     if (isConnected || isConnecting) {
-        std::cout << "startVPN: Already connected or connecting, returning false" << std::endl;
+        logToFile("ERROR: Already connected or connecting, returning false");
         return false;
     }
     
     // Initialize driver if not already initialized
+    logToFile("driverInitialized: " + std::string(driverInitialized ? "true" : "false"));
     if (!driverInitialized) {
+        logToFile("Initializing driver...");
         if (!initializeDriver()) {
+            logToFile("ERROR: Driver initialization failed");
             updateStatus("error");
             return false;
         }
         driverInitialized = true;
+        logToFile("Driver initialized successfully");
     }
     
     // Ensure driver is available
+    logToFile("currentDriver: " + std::string(currentDriver == DriverType::WINTUN ? "WINTUN" : "TAP_WINDOWS"));
     if (currentDriver == DriverType::WINTUN && !isWinTunAvailable()) {
+        logToFile("WinTun not available, checking TAP fallback...");
         if (allowFallbackToTAP && isTapDriverInstalled()) {
             currentDriver = DriverType::TAP_WINDOWS;
-            std::cout << "Falling back to TAP-Windows driver" << std::endl;
+            logToFile("Falling back to TAP-Windows driver");
         } else {
+            logToFile("ERROR: No driver available");
             updateStatus("error");
             return false;
         }
     } else if (currentDriver == DriverType::TAP_WINDOWS && !isTapDriverInstalled()) {
+        logToFile("ERROR: TAP driver not installed");
         updateStatus("error");
         return false;
     }
     
     // Get bundled OpenVPN executable
     std::string openVPNPath = getBundledOpenVPNPath();
+    logToFile("OpenVPN path: " + (openVPNPath.empty() ? "NOT FOUND" : openVPNPath));
     if (openVPNPath.empty()) {
+        logToFile("ERROR: OpenVPN executable not found");
         updateStatus("error");
         return false;
     }
     
     // Create config file
+    logToFile("Creating config file...");
     if (!createConfigFile(config, username, password)) {
+        logToFile("ERROR: Failed to create config file");
         updateStatus("error");
         return false;
     }
+    logToFile("Config file created at: " + currentConfigPath);
     
     try {
         // Prepare command line arguments for bundled OpenVPN
@@ -136,8 +187,10 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         }
         
         // Check if we're already running as admin
-        if (!isRunningAsAdmin()) {
-            std::cout << "Application is not running as administrator. OpenVPN requires elevated privileges." << std::endl;
+        bool isAdmin = isRunningAsAdmin();
+        logToFile("Running as admin: " + std::string(isAdmin ? "true" : "false"));
+        if (!isAdmin) {
+            logToFile("ERROR: Not running as admin - OpenVPN requires elevated privileges");
             updateStatus("error");
             return false;
         }
@@ -158,12 +211,12 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
                 fullCmdLine += " --dev \"" + tapAdapterName + "\"";
             }
         }
-        std::cout << "Full command line: " << fullCmdLine << std::endl;
+        logToFile("Full command line: " + fullCmdLine);
         
         // CRITICAL: Set working directory to app directory for proper DLL loading
         // When running as admin from a shortcut, the working dir might be System32
         std::string appDir = getAppDirectory();
-        std::cout << "Working directory: " << appDir << std::endl;
+        logToFile("Working directory: " + appDir);
         
         BOOL success = CreateProcessA(
             NULL,                     // Application name
@@ -180,6 +233,7 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         
         if (success && processInfo.hProcess) {
             hProcess = processInfo.hProcess;
+            logToFile("OpenVPN process started successfully, PID: " + std::to_string(processInfo.dwProcessId));
             
             isConnecting = true;
             connectionStartTime = std::chrono::system_clock::now();
@@ -194,27 +248,31 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
             smoothedSpeedOut = 0.0;
             
             updateStatus("connecting");
+            logToFile("Status set to 'connecting', starting monitor thread");
             
             // Start monitoring thread
             shouldMonitor = true;
             statusMonitorThread = std::thread(&VPNManager::monitorConnection, this);
             
+            logToFile("=== startVPN completed successfully ===");
             return true;
         } else {
             DWORD error = GetLastError();
-            std::cerr << "Failed to start bundled OpenVPN process. Error: " << error << std::endl;
+            logToFile("ERROR: Failed to start OpenVPN process. Windows error code: " + std::to_string(error));
             updateStatus("error");
             return false;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Exception in startVPN: " << e.what() << std::endl;
+        logToFile("EXCEPTION in startVPN: " + std::string(e.what()));
         updateStatus("error");
         return false;
     }
 }
 
 void VPNManager::stopVPN() {
-    std::cout << "stopVPN: Starting disconnect process..." << std::endl;
+    logToFile("=== stopVPN called ===");
+    logToFile("isConnected: " + std::string(isConnected ? "true" : "false"));
+    logToFile("isConnecting: " + std::string(isConnecting ? "true" : "false"));
     
     // Signal the monitor thread to stop
     shouldMonitor = false;
