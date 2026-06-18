@@ -34,10 +34,11 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                     result(nil) // Return nil if not initialized
                     return
                 }
-                self.utils.getTrafficStats()
-                let s = UserDefaults(suiteName: self.utils.groupIdentifier!)?
-                         .string(forKey: "connectionUpdate")
-                result(s)
+                // Return the freshly computed stats directly instead of writing
+                // them into the app group and reading them back. The write-back
+                // round-trip forced macOS to touch the shared container twice per
+                // poll, re-triggering the "access data from other apps" prompt.
+                result(self.utils.getTrafficStats())
                 break;
             case "stage":
                 let status = self.utils.currentStatus()
@@ -213,6 +214,19 @@ class VPNUtils {
     var localizedDescription : String?
     var groupIdentifier : String?
     var stage : FlutterEventSink!
+
+    // Cached app-group UserDefaults. Re-creating UserDefaults(suiteName:) on
+    // every stats tick spins up a fresh CFPreferences source each time, which
+    // on macOS re-triggers the "access data from other apps" sandbox consent
+    // prompt. Create it once and reuse it; CFPreferences already observes
+    // cross-process (extension) changes, so no synchronize() is needed.
+    private var cachedGroupDefaults: UserDefaults?
+    private func groupDefaults() -> UserDefaults? {
+        if let cached = cachedGroupDefaults { return cached }
+        guard let group = groupIdentifier else { return nil }
+        cachedGroupDefaults = UserDefaults(suiteName: group)
+        return cachedGroupDefaults
+    }
     var vpnStageObserver : NSObjectProtocol?
     
     func loadProviderManager(completion:@escaping (_ error : Error?) -> Void)  {
@@ -348,59 +362,44 @@ class VPNUtils {
     func stopVPN() {
         // Stop the tunnel immediately
         self.providerManager.connection.stopVPNTunnel()
-        
-        // Clear connection update to avoid showing stale stats
-        if let group = groupIdentifier,
-           let sharedDefaults = UserDefaults(suiteName: group) {
-            sharedDefaults.removeObject(forKey: "connectionUpdate")
-            sharedDefaults.synchronize()
-        }
+
+        // Clear connection update to avoid showing stale stats. Reuse the cached
+        // group defaults; no synchronize() (CFPreferences persists on its own).
+        groupDefaults()?.removeObject(forKey: "connectionUpdate")
     }
-    
-    func getTrafficStats() {
-        guard let group = groupIdentifier,
-              let sharedDefaults = UserDefaults(suiteName: group) else { return }
-        
-        sharedDefaults.synchronize()
-        
+
+    /// Reads the latest tunnel stats from the shared app group and returns the
+    /// encoded `connectionUpdate` string for Flutter. Read-only: it does NOT
+    /// write back into the group and does NOT call synchronize(), both of which
+    /// previously forced macOS to touch the shared container every poll and
+    /// re-raised the "access data from other apps" sandbox consent prompt.
+    @discardableResult
+    func getTrafficStats() -> String? {
+        guard let sharedDefaults = groupDefaults() else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
         if let vpnStats = sharedDefaults.dictionary(forKey: "vpn_statistics") {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
             let connectedDate = vpnStats["connected_on"] as? String ?? formatter.string(from: Date())
-            
+
             // Safely extract byte/packet counts
             let bytes_in = extractString(from: vpnStats["byte_in"]) ?? "0"
             let bytes_out = extractString(from: vpnStats["byte_out"]) ?? "0"
             let packets_in = extractString(from: vpnStats["packets_in"]) ?? "0"
             let packets_out = extractString(from: vpnStats["packets_out"]) ?? "0"
-            
-            // ⚠️ CRITICAL CHANGE: DO NOT USE speed_in_mbps / speed_out_mbps on macOS
-            // Let Flutter compute speeds from byte deltas instead
-            let speed_in: Double = 0.0
-            let speed_out: Double = 0.0
-            
-            let connectionUpdate = "\(connectedDate)_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_\(String(format: "%.2f", speed_in))_\(String(format: "%.2f", speed_out))"
-            sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
-            sharedDefaults.synchronize()
-            
-            NSLog("%@", "🔧 Flutter Plugin: Reading VPN stats (macOS - speeds zeroed for Dart calculation):")
-            NSLog("%@", "   Bytes: In=\(bytes_in), Out=\(bytes_out)")
-            NSLog("%@", "   Speeds: DL=\(speed_in) Mbps, UL=\(speed_out) Mbps")
+
+            // Speeds zeroed on macOS; Flutter computes them from byte deltas.
+            return "\(connectedDate)_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.00_0.00"
         } else {
-            // Fallback
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            // Fallback to discrete keys
             let connectedDate = sharedDefaults.object(forKey: "connected_date") as? Date ?? Date()
             let bytes_in = sharedDefaults.string(forKey: "bytes_in") ?? "0"
             let bytes_out = sharedDefaults.string(forKey: "bytes_out") ?? "0"
             let packets_in = sharedDefaults.string(forKey: "packets_in") ?? "0"
             let packets_out = sharedDefaults.string(forKey: "packets_out") ?? "0"
-            
-            let connectionUpdate = "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.00_0.00"
-            sharedDefaults.set(connectionUpdate, forKey: "connectionUpdate")
-            sharedDefaults.synchronize()
-            
-            NSLog("%@", "🔧 Flutter Plugin: Using fallback stats")
+
+            return "\(formatter.string(from: connectedDate))_\(packets_in)_\(packets_out)_\(bytes_in)_\(bytes_out)_0.00_0.00"
         }
     }
     
