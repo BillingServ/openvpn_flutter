@@ -59,6 +59,11 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
         return false;
     }
     
+    // The previous monitor can have exited after process/adapter loss while its
+    // std::thread remains joinable. Join and clean up outside statusMutex before
+    // creating the next process and monitor.
+    if (statusMonitorThread.joinable()) stopVPN();
+
     // Initialize driver if not already initialized
     if (!driverInitialized) {
         if (!initializeDriver()) {
@@ -667,6 +672,7 @@ void VPNManager::monitorConnection() {
                     }
                     
                     if (connectionAttempts > maxConnectionAttempts) {
+                        isConnecting = false;
                         updateStatusThreadSafe("error");
                         std::cerr << "VPN connection timeout" << std::endl;
                         break;

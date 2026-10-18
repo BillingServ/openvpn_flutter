@@ -41,12 +41,20 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 result(self.utils.getTrafficStats())
                 break;
             case "stage":
-                let status = self.utils.currentStatus()
-                result(status)
+                if let status = self.utils.currentStatus() {
+                    result(status)
+                } else {
+                    result(FlutterError(code: "VPN_IDENTITY_UNKNOWN",
+                        message: "VPN provider identity is not initialized", details: nil))
+                }
                 break;
             case "checkStatus":
-                let status = self.utils.currentStatus()
-                result(status)
+                if let status = self.utils.currentStatus() {
+                    result(status)
+                } else {
+                    result(FlutterError(code: "VPN_IDENTITY_UNKNOWN",
+                        message: "VPN provider identity is not initialized", details: nil))
+                }
                 break;
             case "forceStatusCheck":
                 // Force a status check and update
@@ -209,8 +217,20 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
 
 @available(macOS 10.14, *)
 class VPNUtils {
+    private var operationGeneration: UInt64 = 0
+    private var pendingStart: ((Error?) -> Void)?
     var providerManager: NETunnelProviderManager!
-    var providerBundleIdentifier : String?
+    var providerBundleIdentifier : String? {
+        didSet {
+            guard oldValue != providerBundleIdentifier else { return }
+            operationGeneration &+= 1
+            providerManager = nil
+            let cancelledStart = pendingStart
+            pendingStart = nil
+            cancelledStart?(NSError(domain: "OpenVPNFlutter", code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "VPN provider identity changed"]))
+        }
+    }
     var localizedDescription : String?
     var groupIdentifier : String?
     var stage : FlutterEventSink!
@@ -229,19 +249,38 @@ class VPNUtils {
     }
     var vpnStageObserver : NSObjectProtocol?
     
+    func ownsManager(_ manager: NETunnelProviderManager) -> Bool {
+        guard let identifier = providerBundleIdentifier, !identifier.isEmpty,
+              let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol else { return false }
+        return configuration.providerBundleIdentifier == identifier
+    }
+
+    func ownsConnection(_ connection: NEVPNConnection) -> Bool {
+        guard let manager = providerManager, ownsManager(manager) else { return false }
+        return connection === manager.connection
+    }
+
     func loadProviderManager(completion:@escaping (_ error : Error?) -> Void)  {
+        let generation = operationGeneration
         NETunnelProviderManager.loadAllFromPreferences { (managers, error)  in
+            guard self.operationGeneration == generation else { completion(nil); return }
             if error == nil {
-                self.providerManager = managers?.first ?? NETunnelProviderManager()
+                self.providerManager = managers?.first(where: self.ownsManager) ?? NETunnelProviderManager()
                 
+                if let observer = self.vpnStageObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    self.vpnStageObserver = nil
+                }
                 // Set up VPN status observer (don't filter by object to avoid missing updates)
                 self.vpnStageObserver = NotificationCenter.default.addObserver(
                     forName: .NEVPNStatusDidChange,
                     object: nil,  // Receive regardless of connection instance
                     queue: .main
-                ) { [weak self] _ in
-                    let status = self?.providerManager.connection.status ?? .invalid
-                    self?.onVpnStatusChanged(notification: status)
+                ) { [weak self] notification in
+                    guard let self = self,
+                          let connection = notification.object as? NEVPNConnection,
+                          self.ownsConnection(connection) else { return }
+                    self.onVpnStatusChanged(notification: connection.status)
                 }
                 
                 // Check current status immediately
@@ -296,8 +335,9 @@ class VPNUtils {
     }
     
     func currentStatus() -> String? {
-        if self.providerManager != nil {
-            let status = self.providerManager.connection.status
+        guard let identifier = providerBundleIdentifier, !identifier.isEmpty else { return nil }
+        if let manager = self.providerManager, ownsManager(manager) {
+            let status = manager.connection.status
             let statusString = onVpnStatusChangedString(notification: status)
             return statusString
         }
@@ -305,9 +345,27 @@ class VPNUtils {
     }
     
     func configureVPN(config: String?, username : String?,password : String?,completion:@escaping (_ error : Error?) -> Void) {
+        operationGeneration &+= 1
+        let generation = operationGeneration
+        let previousStart = pendingStart
+        pendingStart = completion
+        previousStart?(NSError(domain: "OpenVPNFlutter", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Superseded by a newer start"]))
+        let complete: (Error?) -> Void = { [weak self] error in
+            guard let self = self, self.operationGeneration == generation else { return }
+            let callback = self.pendingStart
+            self.pendingStart = nil
+            callback?(error)
+        }
+        guard let manager = providerManager else {
+            complete(NSError(domain: "OpenVPNFlutter", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "VPN manager is not initialized"]))
+            return
+        }
         let configData = config
         
-        self.providerManager?.loadFromPreferences { error in
+        manager.loadFromPreferences { error in
+            guard self.operationGeneration == generation else { return }
             if error == nil {
                 let tunnelProtocol = NETunnelProviderProtocol()
                 tunnelProtocol.serverAddress = "" // Use empty string like iOS
@@ -326,10 +384,12 @@ class VPNUtils {
                 self.providerManager.localizedDescription = self.localizedDescription
                 self.providerManager.isEnabled = true
                 self.providerManager.saveToPreferences(completionHandler: { (error) in
+                    guard self.operationGeneration == generation else { return }
                     if error == nil {
                         self.providerManager.loadFromPreferences(completionHandler: { (error) in
+                            guard self.operationGeneration == generation else { return }
                             if let error = error {
-                                completion(error)
+                                complete(error)
                                 return
                             }
                             
@@ -344,24 +404,31 @@ class VPNUtils {
                                 } else {
                                     try self.providerManager.connection.startVPNTunnel()
                                 }
-                                completion(nil)
+                                complete(nil)
                             } catch {
-                                completion(error)
+                                complete(error)
                             }
                         })
                     } else {
-                        completion(error)
+                        complete(error)
                     }
                 })
             } else {
-                completion(error)
+                complete(error)
             }
         }
     }
     
     func stopVPN() {
+        operationGeneration &+= 1
+        let cancelledStart = pendingStart
+        pendingStart = nil
+        cancelledStart?(NSError(domain: "OpenVPNFlutter", code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "Stopped"]))
         // Stop the tunnel immediately
-        self.providerManager.connection.stopVPNTunnel()
+        if let manager = providerManager, ownsManager(manager) {
+            manager.connection.stopVPNTunnel()
+        }
 
         // Clear connection update to avoid showing stale stats. Reuse the cached
         // group defaults; no synchronize() (CFPreferences persists on its own).
