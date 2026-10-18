@@ -252,7 +252,10 @@ class VPNUtils {
     func ownsManager(_ manager: NETunnelProviderManager) -> Bool {
         guard let identifier = providerBundleIdentifier, !identifier.isEmpty,
               let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol else { return false }
-        return configuration.providerBundleIdentifier == identifier
+        // The packet-drop blocker uses this same extension, but is not a VPN
+        // session and must never be adopted, reported connected or overwritten.
+        return configuration.providerBundleIdentifier == identifier &&
+            configuration.providerConfiguration?["killSwitchMode"] as? Bool != true
     }
 
     func ownsConnection(_ connection: NEVPNConnection) -> Bool {

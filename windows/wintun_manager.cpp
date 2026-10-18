@@ -48,6 +48,7 @@ bool WinTunManager::createAdapter(const std::string& name) {
         return false;
     }
     
+    if (adapter) return false;
     adapterName = name.empty() ? generateAdapterName() : name;
     adapterGuid = generateGuid();
     
@@ -69,9 +70,9 @@ bool WinTunManager::createAdapter(const std::string& name) {
 
 bool WinTunManager::destroyAdapter() {
     if (adapter && WinTunCloseAdapter) {
-        BOOL result = WinTunCloseAdapter(adapter);
+        WinTunCloseAdapter(adapter);
         adapter = NULL;
-        return result == TRUE;
+        return true;
     }
     return true;
 }

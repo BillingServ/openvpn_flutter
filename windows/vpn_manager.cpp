@@ -18,14 +18,34 @@
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <winreg.h>
+#include <objbase.h>
+#include <algorithm>
+#include <cstring>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "ole32.lib")
 
 namespace openvpn_flutter {
+
+namespace {
+std::string guidString(const GUID& guid) {
+    wchar_t text[40]{};
+    if (!StringFromGUID2(guid, text, 40)) return "";
+    const std::wstring value(text);
+    return std::string(value.begin(), value.end());
+}
+
+std::string newAdapterAlias() {
+    GUID guid{};
+    if (FAILED(CoCreateGuid(&guid))) return "";
+    const auto value = guidString(guid);
+    return value.empty() ? "" : "OpenVPN-Flutter-" + value.substr(1, value.size() - 2);
+}
+} // namespace
 
 VPNManager::VPNManager() {
     ZeroMemory(&processInfo, sizeof(processInfo));
@@ -62,31 +82,22 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
     // The previous monitor can have exited after process/adapter loss while its
     // std::thread remains joinable. Join and clean up outside statusMutex before
     // creating the next process and monitor.
-    if (statusMonitorThread.joinable()) stopVPN();
+    if (statusMonitorThread.joinable() || hProcess) stopVPN();
+    if (hProcess) return false;
 
-    // Initialize driver if not already initialized
-    if (!driverInitialized) {
-        if (!initializeDriver()) {
-            updateStatus("error");
-            return false;
-        }
-        driverInitialized = true;
-    }
-    
-    // Ensure driver is available
-    if (currentDriver == DriverType::WINTUN && !isWinTunAvailable()) {
-        if (allowFallbackToTAP && isTapDriverInstalled()) {
-            currentDriver = DriverType::TAP_WINDOWS;
-            std::cout << "Falling back to TAP-Windows driver" << std::endl;
-        } else {
-            updateStatus("error");
-            return false;
-        }
-    } else if (currentDriver == DriverType::TAP_WINDOWS && !isTapDriverInstalled()) {
+    if (!isRunningAsAdmin()) {
         updateStatus("error");
         return false;
     }
-    
+    if (!driverInitialized && !initializeDriver()) {
+        updateStatus("error");
+        return false;
+    }
+    if (!hasOwnedAdapter) {
+        updateStatus("error");
+        return false;
+    }
+
     // Get bundled OpenVPN executable
     std::string openVPNPath = getBundledOpenVPNPath();
     if (openVPNPath.empty()) {
@@ -101,78 +112,28 @@ bool VPNManager::startVPN(const std::string& config, const std::string& username
     }
     
     try {
-        // Prepare command line arguments for bundled OpenVPN
-        std::ostringstream cmdStream;
-        cmdStream << "\"" << openVPNPath << "\" --config \"" << currentConfigPath << "\"";
-        
-        // Add minimal options
-        cmdStream << " --verb 3";
-        
-        // Disable DCO to avoid netsh permission issues
-        cmdStream << " --disable-dco";
-        
-        // For TAP-Windows, add driver-specific options
-        if (currentDriver == DriverType::TAP_WINDOWS) {
-            cmdStream << " --dev-type tap";
-            if (!tapAdapterName.empty()) {
-                cmdStream << " --dev \"" << tapAdapterName << "\"";
-            }
-            std::cout << "Using TAP-Windows driver for OpenVPN connection" << std::endl;
-        } else if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Using WinTun driver (configured via config file: dev tun + windows-driver wintun)" << std::endl;
-        }
-        
-        std::string cmdLine = cmdStream.str();
-        std::cout << "DEBUG: Full OpenVPN command line: " << cmdLine << std::endl;
-        
-        // DEBUG: Verify config file exists and show its first few lines
-        std::ifstream configCheck(currentConfigPath);
-        if (configCheck.is_open()) {
-            std::cout << "DEBUG: Config file exists at: " << currentConfigPath << std::endl;
-            std::string firstLine;
-            int lineCount = 0;
-            while (std::getline(configCheck, firstLine) && lineCount < 10) {
-                std::cout << "DEBUG: Config line " << (lineCount + 1) << ": " << firstLine << std::endl;
-                lineCount++;
-            }
-            configCheck.close();
-        } else {
-            std::cout << "ERROR: Config file does not exist at: " << currentConfigPath << std::endl;
-        }
-        
-        // Check if we're already running as admin
-        if (!isRunningAsAdmin()) {
-            std::cout << "Application is not running as administrator. OpenVPN requires elevated privileges." << std::endl;
-            updateStatus("error");
-            return false;
-        }
-        
-        // Start OpenVPN process (already elevated since app is running as admin)
-        STARTUPINFOA startupInfo;
+        // --dev-node selects this exact adapter GUID for both drivers. Appended
+        // managed options also keep the fresh log's event format deterministic.
+        std::string fullCmdLine = "\"" + openVPNPath + "\" --config \"" + currentConfigPath +
+            "\" --dev " + deviceType + " --dev-type " + deviceType +
+            " --windows-driver " + (currentDriver == DriverType::WINTUN ? "wintun" : "tap-windows6") +
+            " --dev-node \"" + ownedAdapterNode + "\" --disable-dco --verb 3 --mute 0" +
+            " --suppress-timestamps --log-append \"" + currentLogPath + "\"";
+
+        STARTUPINFOA startupInfo{};
         ZeroMemory(&processInfo, sizeof(processInfo));
-        ZeroMemory(&startupInfo, sizeof(startupInfo));
         startupInfo.cb = sizeof(startupInfo);
         startupInfo.dwFlags = STARTF_USESHOWWINDOW;
         startupInfo.wShowWindow = SW_HIDE;
-        
-        // Build command line with all arguments
-        std::string fullCmdLine = "\"" + openVPNPath + "\" --config \"" + currentConfigPath + "\" --verb 3 --disable-dco";
-        if (currentDriver == DriverType::TAP_WINDOWS) {
-            fullCmdLine += " --dev-type tap";
-            if (!tapAdapterName.empty()) {
-                fullCmdLine += " --dev \"" + tapAdapterName + "\"";
-            }
-        }
-        std::cout << "Full command line: " << fullCmdLine << std::endl;
-        
+
         // CRITICAL: Set working directory to app directory for proper DLL loading
         // When running as admin from a shortcut, the working dir might be System32
         std::string appDir = getAppDirectory();
         std::cout << "Working directory: " << appDir << std::endl;
         
         BOOL success = CreateProcessA(
-            NULL,                     // Application name
-            (LPSTR)fullCmdLine.c_str(), // Command line
+            openVPNPath.c_str(),      // Exact bundled executable
+            fullCmdLine.data(),        // Mutable command line (CreateProcess may modify it)
             NULL,                     // Process security attributes
             NULL,                     // Thread security attributes
             FALSE,                    // Inherit handles
@@ -235,7 +196,10 @@ void VPNManager::stopVPN() {
     if (hProcess) {
         std::cout << "stopVPN: Terminating OpenVPN process..." << std::endl;
         TerminateProcess(hProcess, 0);
-        WaitForSingleObject(hProcess, 5000);
+        if (WaitForSingleObject(hProcess, 5000) != WAIT_OBJECT_0) {
+            updateStatus("error");
+            return;
+        }
         CloseHandle(hProcess);
         CloseHandle(processInfo.hThread);
         hProcess = NULL;
@@ -274,11 +238,26 @@ void VPNManager::stopVPN() {
     smoothedSpeedOut = 0.0;
     
     cleanupTempFiles();
+    releaseOwnedAdapter();
     std::cout << "stopVPN: Disconnect complete, ready for new connection" << std::endl;
 }
 
 std::string VPNManager::getStatus() {
-    return currentStatus;
+    std::string status;
+    {
+        std::lock_guard<std::mutex> lock(statusMutex);
+        status = currentStatus;
+    }
+    // A timed-out start or failed stop can retain a live child. "error" is a
+    // terminal-down stage in Dart, so preserve establishing until child exit
+    // is confirmed. An unreadable process handle is also unknown, never down.
+    if (hProcess) {
+        DWORD exitCode = 0;
+        if (!GetExitCodeProcess(hProcess, &exitCode)) return "connecting";
+        if (exitCode != STILL_ACTIVE) return "disconnected";
+        return status == "connected" && checkConnectionStatus() ? "connected" : "connecting";
+    }
+    return status == "connected" || status == "connecting" ? "disconnected" : status;
 }
 
 std::string VPNManager::getConnectionStats() {
@@ -289,9 +268,18 @@ std::string VPNManager::getConnectionStats() {
     auto [bytesIn, bytesOut] = getRealNetworkStats();
     
     // Check if we have any VPN activity (even if connection flags aren't set correctly)
-    bool hasVpnActivity = (bytesIn > 0 || bytesOut > 0) || (isConnected || isConnecting);
+    bool hasVpnActivity = checkConnectionStatus();
     
     if (hasVpnActivity) {
+        uint64_t packetsIn = 0, packetsOut = 0;
+        {
+            std::lock_guard<std::mutex> lock(connectionMutex);
+            MIB_IF_ROW2 row{};
+            if (readOwnedAdapterRow(row)) {
+                packetsIn = row.InUcastPkts + row.InNUcastPkts;
+                packetsOut = row.OutUcastPkts + row.OutNUcastPkts;
+            }
+        }
         // Calculate connection duration
         auto connectionDuration = std::chrono::duration_cast<std::chrono::seconds>(now - connectionStartTime);
         int hours = static_cast<int>(connectionDuration.count()) / 3600;
@@ -317,8 +305,8 @@ std::string VPNManager::getConnectionStats() {
             << std::setfill('0') << std::setw(2) << seconds << "\""
             << ",\"byte_in\":\"" << bytesIn << "\""
             << ",\"byte_out\":\"" << bytesOut << "\""
-            << ",\"packets_in\":\"" << bytesIn << "\""
-            << ",\"packets_out\":\"" << bytesOut << "\""
+            << ",\"packets_in\":\"" << packetsIn << "\""
+            << ",\"packets_out\":\"" << packetsOut << "\""
             << ",\"speed_in_mbps\":\"" << std::fixed << std::setprecision(2) << speedInMbps << "\""
             << ",\"speed_out_mbps\":\"" << std::fixed << std::setprecision(2) << speedOutMbps << "\""
             << ",\"speed_in_bps\":\"" << static_cast<uint64_t>(currentSpeedIn) << "\""
@@ -331,212 +319,49 @@ std::string VPNManager::getConnectionStats() {
 }
 
 bool VPNManager::initializeDriver() {
-    // Try WinTun first (preferred)
-    if (preferredDriver == DriverType::WINTUN || 
-        (preferredDriver == DriverType::TAP_WINDOWS && allowFallbackToTAP)) {
-        
-        if (initializeWinTun()) {
-            currentDriver = DriverType::WINTUN;
-            driverInitialized = true;
-            std::cout << "Using WinTun driver for VPN connections" << std::endl;
-            return true;
-        }
-    }
-    
-    // Fallback to TAP-Windows if allowed
-    if (allowFallbackToTAP && initializeTapDriver()) {
-        currentDriver = DriverType::TAP_WINDOWS;
+    if (driverInitialized && hasOwnedAdapter) return true;
+    if (hProcess) return false;
+    releaseOwnedAdapter();
+    if (preferredDriver == DriverType::WINTUN && initializeWinTun()) {
+        currentDriver = DriverType::WINTUN;
         driverInitialized = true;
-        std::cout << "Using TAP-Windows driver for VPN connections" << std::endl;
         return true;
     }
-    
-    std::cerr << "Failed to initialize any VPN driver" << std::endl;
+    if ((preferredDriver == DriverType::TAP_WINDOWS || allowFallbackToTAP) && initializeTapDriver()) {
+        currentDriver = DriverType::TAP_WINDOWS;
+        driverInitialized = true;
+        return true;
+    }
     driverInitialized = false;
     return false;
 }
 
 bool VPNManager::initializeWinTun() {
-    if (!wintunManager) {
-        wintunManager = std::make_unique<WinTunManager>();
-    }
-    
-    if (!wintunManager->initialize()) {
-        std::cerr << "Failed to initialize WinTun manager" << std::endl;
-        return false;
-    }
-    
-    if (!wintunManager->isWinTunAvailable()) {
-        std::cerr << "WinTun is not available on this system" << std::endl;
-        return false;
-    }
-    
-    // Try using tapctl.exe (OpenVPN 2.6.14+ preferred method)
-    std::string tapctlPath = findBundledExecutable("tapctl.exe");
-    std::string appDir = getAppDirectory();
-    std::string adapterName = "OpenVPN-Flutter";
-    
-    if (!tapctlPath.empty()) {
-        std::cout << "Found tapctl.exe, creating WinTun adapter..." << std::endl;
-        
-        // CRITICAL: First DELETE any existing adapter to ensure clean state
-        // This is essential after WireGuard has been used, as there may be
-        // stale adapter state that prevents OpenVPN from working
-        std::ostringstream deleteStream;
-        deleteStream << "\"" << tapctlPath << "\" delete \"" << adapterName << "\"";
-        std::string deleteCmdLine = deleteStream.str();
-        
-        STARTUPINFOA deleteStartupInfo;
-        PROCESS_INFORMATION deleteProcessInfo;
-        ZeroMemory(&deleteProcessInfo, sizeof(deleteProcessInfo));
-        ZeroMemory(&deleteStartupInfo, sizeof(deleteStartupInfo));
-        deleteStartupInfo.cb = sizeof(deleteStartupInfo);
-        deleteStartupInfo.dwFlags = STARTF_USESHOWWINDOW;
-        deleteStartupInfo.wShowWindow = SW_HIDE;
-        
-        BOOL deleteSuccess = CreateProcessA(
-            NULL,
-            (LPSTR)deleteCmdLine.c_str(),
-            NULL,
-            NULL,
-            FALSE,
-            CREATE_NO_WINDOW,
-            NULL,
-            appDir.c_str(),
-            &deleteStartupInfo,
-            &deleteProcessInfo
-        );
-        
-        if (deleteSuccess) {
-            WaitForSingleObject(deleteProcessInfo.hProcess, 3000);
-            CloseHandle(deleteProcessInfo.hProcess);
-            CloseHandle(deleteProcessInfo.hThread);
-            
-            // Small delay after deletion to ensure system has released resources
-            Sleep(500);
-        }
-        
-        // Now CREATE a fresh adapter
-        std::ostringstream createStream;
-        createStream << "\"" << tapctlPath << "\" create --hwid wintun --name \"" << adapterName << "\"";
-        std::string createCmdLine = createStream.str();
-        
-        STARTUPINFOA createStartupInfo;
-        PROCESS_INFORMATION createProcessInfo;
-        ZeroMemory(&createProcessInfo, sizeof(createProcessInfo));
-        ZeroMemory(&createStartupInfo, sizeof(createStartupInfo));
-        createStartupInfo.cb = sizeof(createStartupInfo);
-        createStartupInfo.dwFlags = STARTF_USESHOWWINDOW;
-        createStartupInfo.wShowWindow = SW_HIDE;
-        
-        BOOL createSuccess = CreateProcessA(
-            NULL,
-            (LPSTR)createCmdLine.c_str(),
-            NULL,
-            NULL,
-            FALSE,
-            CREATE_NO_WINDOW,
-            NULL,
-            appDir.c_str(),
-            &createStartupInfo,
-            &createProcessInfo
-        );
-        
-        if (createSuccess) {
-            WaitForSingleObject(createProcessInfo.hProcess, 5000);
-            DWORD createExitCode;
-            if (GetExitCodeProcess(createProcessInfo.hProcess, &createExitCode)) {
-                CloseHandle(createProcessInfo.hProcess);
-                CloseHandle(createProcessInfo.hThread);
-                
-                if (createExitCode == 0) {
-                    std::cout << "Successfully created WinTun adapter using tapctl.exe" << std::endl;
-                    return true;
-                } else {
-                    std::cout << "tapctl.exe exited with code: " << createExitCode << ", falling back to programmatic creation" << std::endl;
-                }
-            } else {
-                CloseHandle(createProcessInfo.hProcess);
-                CloseHandle(createProcessInfo.hThread);
-                std::cout << "Could not get tapctl.exe exit code, falling back to programmatic creation" << std::endl;
-            }
-        } else {
-            DWORD error = GetLastError();
-            std::cout << "Failed to run tapctl.exe (error " << error << "), falling back to programmatic creation" << std::endl;
-        }
-    } else {
-        std::cout << "tapctl.exe not found, using programmatic adapter creation" << std::endl;
-    }
-    
-    // Fallback: Create WinTun adapter programmatically
-    if (!wintunManager->createAdapter(adapterName)) {
-        std::cerr << "Failed to create WinTun adapter programmatically" << std::endl;
-        return false;
-    }
-    
-    std::cout << "WinTun driver initialized successfully (programmatic creation)" << std::endl;
-    return true;
+    if (!wintunManager) wintunManager = std::make_unique<WinTunManager>();
+    if (!wintunManager->initialize()) return false;
+    if (createOwnedAdapter("wintun")) return true;
+
+    // The DLL fallback also creates a unique adapter, held until the child exits.
+    const auto alias = newAdapterAlias();
+    if (alias.empty() || !wintunManager->createAdapter(alias)) return false;
+    if (captureOwnedAdapter(alias)) return true;
+    wintunManager->destroyAdapter();
+    return false;
 }
 
 bool VPNManager::initializeTapDriver() {
-    // Check if TAP driver is installed
     tapDriverInstalled = isTapDriverInstalled();
-    std::cout << "TAP driver installed: " << (tapDriverInstalled ? "Yes" : "No") << std::endl;
-    
-    if (tapDriverInstalled) {
-        // Find existing TAP adapter
-        tapAdapterName = findTapAdapter();
-        std::cout << "TAP adapter found: " << (tapAdapterName.empty() ? "None" : tapAdapterName) << std::endl;
-        
-        if (tapAdapterName.empty()) {
-            // Try to create one
-            std::cout << "Attempting to create TAP adapter..." << std::endl;
-            return createTapAdapter();
-        }
-        return true;
-    }
-    
-    // Try to install TAP driver
-    std::cout << "Attempting to install TAP driver..." << std::endl;
-    return installTapDriver();
+    if (!tapDriverInstalled) return installTapDriver();
+    return createTapAdapter();
 }
 
 bool VPNManager::installTapDriver() {
-    try {
-        std::string tapDriverPath = findBundledExecutable("tapinstall.exe");
-        if (tapDriverPath.empty()) {
-            std::cerr << "TAP driver installer not found in bundle" << std::endl;
-            return false;
-        }
-        
-        std::string tapInfPath = findBundledExecutable("OemVista.inf");
-        if (tapInfPath.empty()) {
-            std::cerr << "TAP driver INF file not found in bundle" << std::endl;
-            return false;
-        }
-        
-        // Install TAP driver (requires admin privileges)
-        std::string installCmd = "\"" + tapDriverPath + "\" install \"" + tapInfPath + "\" tap0901";
-        
-        if (!runAsAdmin(installCmd)) {
-            std::cerr << "Failed to install TAP driver" << std::endl;
-            return false;
-        }
-        
-        // Create TAP adapter
-        std::string createCmd = "\"" + tapDriverPath + "\" create tap0901 TAPVPN";
-        if (!runAsAdmin(createCmd)) {
-            std::cerr << "Failed to create TAP adapter" << std::endl;
-            return false;
-        }
-        
-        tapDriverInstalled = true;
-        tapAdapterName = findTapAdapter();
-        
-        return !tapAdapterName.empty();
-    } catch (...) {
-        return false;
-    }
+    const auto installer = findBundledExecutable("tapinstall.exe");
+    const auto inf = findBundledExecutable("OemVista.inf");
+    if (installer.empty() || inf.empty()) return false;
+    if (!runAsAdmin("\"" + installer + "\" install \"" + inf + "\" tap0901")) return false;
+    tapDriverInstalled = isTapDriverInstalled();
+    return tapDriverInstalled && createTapAdapter();
 }
 
 bool VPNManager::isTapDriverInstalled() {
@@ -641,151 +466,183 @@ std::string VPNManager::findBundledExecutable(const std::string& filename) {
 
 void VPNManager::monitorConnection() {
     int connectionAttempts = 0;
-    const int maxConnectionAttempts = 300; // 30 seconds
-    int connectedStableCount = 0;
-    const int requiredStableCount = 10; // 1 second of stable connection
-    
+    const int maxConnectionAttempts = 300;
     while (shouldMonitor && hProcess) {
-        DWORD exitCode;
-        if (GetExitCodeProcess(hProcess, &exitCode)) {
-            if (exitCode == STILL_ACTIVE) {
-                if (isConnecting) {
-                    connectionAttempts++;
-                    
-                    // Check if OpenVPN process is running and stable
-                    if (connectionAttempts > 50) { // Give 5 seconds for process to start
-                        // Try to detect actual connection by checking for network adapter changes
-                        // or by reading OpenVPN log output (simplified check here)
-                        bool connectionDetected = checkConnectionStatus();
-                        
-                        if (connectionDetected) {
-                            connectedStableCount++;
-                            if (connectedStableCount >= requiredStableCount) {
-                                isConnecting = false;
-                                isConnected = true;
-                                updateStatusThreadSafe("connected");
-                                std::cout << "VPN connection established successfully" << std::endl;
-                            }
-                        } else {
-                            connectedStableCount = 0; // Reset counter if connection not stable
-                        }
-                    }
-                    
-                    if (connectionAttempts > maxConnectionAttempts) {
-                        isConnecting = false;
-                        updateStatusThreadSafe("error");
-                        std::cerr << "VPN connection timeout" << std::endl;
-                        break;
-                    }
-                } else if (isConnected) {
-                    // Continuously monitor active connection
-                    if (!checkConnectionStatus()) {
-                        // Connection lost
-                        isConnected = false;
-                        updateStatusThreadSafe("disconnected");
-                        std::cout << "VPN connection lost" << std::endl;
-                        break;
-                    }
-                }
-            } else {
-                // Process exited
-                std::cout << "OpenVPN process exited with code: " << exitCode << std::endl;
-                isConnected = false;
-                isConnecting = false;
-                updateStatusThreadSafe("disconnected");
-                std::cout << "OpenVPN process exited with code: " << exitCode << std::endl;
-                break;
-            }
-        } else {
-            // Error getting process status
+        DWORD exitCode = 0;
+        if (!GetExitCodeProcess(hProcess, &exitCode) || exitCode != STILL_ACTIVE) {
             isConnected = false;
             isConnecting = false;
-            updateStatusThreadSafe("error");
-            std::cerr << "Error monitoring OpenVPN process" << std::endl;
+            updateStatusThreadSafe("disconnected");
             break;
         }
-        
+        if (checkConnectionStatus()) {
+            connectionAttempts = 0;
+            if (!isConnected.exchange(true)) {
+                isConnecting = false;
+                updateStatusThreadSafe("connected");
+            }
+        } else {
+            if (isConnected.exchange(false)) {
+                isConnecting = true;
+                connectionAttempts = 0;
+                updateStatusThreadSafe("connecting");
+            }
+            if (++connectionAttempts > maxConnectionAttempts) {
+                isConnecting = false;
+                updateStatusThreadSafe("error");
+                break;
+            }
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
 bool VPNManager::checkConnectionStatus() {
-    // Check if we have a VPN adapter with an IP address in the VPN range (10.x.x.x)
-    // This works for both WinTun and TAP adapters created by OpenVPN
-    
-    ULONG bufferSize = 0;
-    GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, NULL, &bufferSize);
-    
-    if (bufferSize > 0) {
-        std::vector<char> buffer(bufferSize);
-        PIP_ADAPTER_ADDRESSES adapters = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
-        
-        if (GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, adapters, &bufferSize) == NO_ERROR) {
-            for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL; adapter = adapter->Next) {
-                // Check if adapter is up and has an IP address
-                if (adapter->OperStatus == IfOperStatusUp && adapter->FirstUnicastAddress != NULL) {
-                    // Check if this is a TUN/TAP adapter (OpenVPN, WinTun, etc.)
-                    std::wstring description(adapter->Description);
-                    bool isVpnAdapter = (description.find(L"TAP") != std::wstring::npos ||
-                                        description.find(L"TUN") != std::wstring::npos ||
-                                        description.find(L"Wintun") != std::wstring::npos ||
-                                        description.find(L"OpenVPN") != std::wstring::npos);
-                    
-                    if (isVpnAdapter) {
-                        // Check if the IP address is in a typical VPN range (10.x.x.x or 172.16-31.x.x)
-                        for (PIP_ADAPTER_UNICAST_ADDRESS addr = adapter->FirstUnicastAddress; addr != NULL; addr = addr->Next) {
-                            if (addr->Address.lpSockaddr->sa_family == AF_INET) {
-                                struct sockaddr_in* sockaddr = (struct sockaddr_in*)addr->Address.lpSockaddr;
-                                unsigned char* ip = (unsigned char*)&sockaddr->sin_addr;
-                                
-                                // Check for 10.x.x.x (common VPN range)
-                                if (ip[0] == 10) {
-                                    return true;
-                                }
-                                // Check for 172.16.x.x - 172.31.x.x (VPN range)
-                                if (ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    std::lock_guard<std::mutex> lock(connectionMutex);
+    DWORD exitCode = 0;
+    if (!hProcess || !GetExitCodeProcess(hProcess, &exitCode) || exitCode != STILL_ACTIVE) return false;
+    if (!readConnectionLog()) return false;
+    MIB_IF_ROW2 row{};
+    return readOwnedAdapterRow(row);
+}
+
+bool VPNManager::readConnectionLog() {
+    // A precreated adapter and a running process cannot prove a TLS/session
+    // handshake. Read only complete events from this launch's fresh log.
+    std::ifstream log(currentLogPath, std::ios::binary);
+    if (!log) return false;
+    log.seekg(0, std::ios::end);
+    const std::streamoff size = log.tellg();
+    if (size < 0) return false;
+    if (size < logReadOffset) {
+        logReadOffset = 0;
+        pendingLogLine.clear();
+        initializationComplete = false;
+        initializationFailed = false;
+    }
+    log.seekg(logReadOffset);
+    char chunk[65536];
+    log.read(chunk, sizeof(chunk));
+    const auto count = log.gcount();
+    logReadOffset += count;
+    pendingLogLine.append(chunk, static_cast<size_t>(count));
+    size_t end;
+    while ((end = pendingLogLine.find('\n')) != std::string::npos) {
+        std::string line = pendingLogLine.substr(0, end);
+        pendingLogLine.erase(0, end + 1);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const bool restarting = line.rfind("SIGUSR1[", 0) == 0 || line.rfind("SIGHUP[", 0) == 0;
+        if (restarting) {
+            initializationComplete = false;
+            initializationFailed = false;
+        } else if (line.rfind("SIGTERM[", 0) == 0 || line.rfind("SIGINT[", 0) == 0 ||
+                   line.rfind("ERROR:", 0) == 0 || line.rfind("Options error:", 0) == 0 ||
+                   line.rfind("Exiting due to fatal error", 0) == 0 ||
+                   line.find("AUTH_FAILED") != std::string::npos ||
+                   line.rfind("Initialization Sequence Completed With Errors", 0) == 0) {
+            initializationComplete = false;
+            initializationFailed = true;
+        } else if (line == "Initialization Sequence Completed") {
+            initializationComplete = !initializationFailed;
         }
     }
-    
+    if (pendingLogLine.size() > sizeof(chunk)) {
+        pendingLogLine.clear();
+        initializationComplete = false;
+        initializationFailed = true;
+    }
+    // Never publish old success while newer unread events may revoke it.
+    return logReadOffset == size && pendingLogLine.empty() && initializationComplete;
+}
+
+bool VPNManager::readOwnedAdapterRow(MIB_IF_ROW2& row) {
+    if (!hasOwnedAdapter) return false;
+    row = {};
+    row.InterfaceLuid = ownedAdapterLuid;
+    return GetIfEntry2(&row) == NO_ERROR &&
+        IsEqualGUID(row.InterfaceGuid, ownedAdapterGuid) && row.OperStatus == IfOperStatusUp;
+}
+
+bool VPNManager::captureOwnedAdapter(const std::string& alias) {
+    const std::wstring wideAlias(alias.begin(), alias.end());
+    NET_LUID luid{};
+    GUID guid{};
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        if (ConvertInterfaceAliasToLuid(wideAlias.c_str(), &luid) == NO_ERROR &&
+            ConvertInterfaceLuidToGuid(&luid, &guid) == NO_ERROR) {
+            std::lock_guard<std::mutex> lock(connectionMutex);
+            ownedAdapterAlias = alias;
+            ownedAdapterGuid = guid;
+            ownedAdapterLuid = luid;
+            ownedAdapterNode = guidString(guid);
+            hasOwnedAdapter = !ownedAdapterNode.empty();
+            return hasOwnedAdapter;
+        }
+        Sleep(50);
+    }
     return false;
 }
 
-bool VPNManager::checkTapAdapterStatus() {
-    if (tapAdapterName.empty()) return false;
-    
-    // Check if TAP adapter has an IP address assigned
-    ULONG bufferSize = 0;
-    GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, NULL, &bufferSize);
-    
-    if (bufferSize > 0) {
-        std::vector<char> buffer(bufferSize);
-        PIP_ADAPTER_ADDRESSES adapters = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
-        
-        if (GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_PREFIX, NULL, adapters, &bufferSize) == NO_ERROR) {
-            for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL; adapter = adapter->Next) {
-                if (adapter->AdapterName && 
-                    std::string(adapter->AdapterName) == tapAdapterName &&
-                    adapter->OperStatus == IfOperStatusUp &&
-                    adapter->FirstUnicastAddress != NULL) {
-                    return true; // Adapter is up and has IP address
-                }
-            }
-        }
+bool VPNManager::runAdapterTool(const std::string& path, const std::string& arguments) {
+    STARTUPINFOA startup{};
+    PROCESS_INFORMATION process{};
+    startup.cb = sizeof(startup);
+    std::string command = "\"" + path + "\" " + arguments;
+    if (!CreateProcessA(path.c_str(), command.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) return false;
+    const DWORD waited = WaitForSingleObject(process.hProcess, 10000);
+    if (waited != WAIT_OBJECT_0) {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, 5000);
     }
-    
-    return false;
+    DWORD code = 1;
+    const bool success = waited == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &code) && code == 0;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return success;
+}
+
+bool VPNManager::createOwnedAdapter(const std::string& hardwareId) {
+    const auto tool = findBundledExecutable("tapctl.exe");
+    const auto alias = newAdapterAlias();
+    if (tool.empty() || alias.empty()) return false;
+    if (!runAdapterTool(tool, "create --hwid " + hardwareId + " --name \"" + alias + "\"")) return false;
+    if (!captureOwnedAdapter(alias)) {
+        // The unique alias belongs to this successful create operation only.
+        runAdapterTool(tool, "delete \"" + alias + "\"");
+        return false;
+    }
+    ownedAdapterToolPath = tool;
+    return true;
+}
+
+void VPNManager::releaseOwnedAdapter() {
+    std::string tool, node;
+    {
+        std::lock_guard<std::mutex> lock(connectionMutex);
+        tool = ownedAdapterToolPath;
+        node = ownedAdapterNode;
+        hasOwnedAdapter = false;
+        ownedAdapterGuid = {};
+        ownedAdapterLuid = {};
+        ownedAdapterNode.clear();
+        ownedAdapterAlias.clear();
+        ownedAdapterToolPath.clear();
+        initializationComplete = false;
+        initializationFailed = false;
+        pendingLogLine.clear();
+        logReadOffset = 0;
+    }
+    if (!tool.empty() && !node.empty()) runAdapterTool(tool, "delete \"" + node + "\"");
+    if (wintunManager) wintunManager->destroyAdapter();
 }
 
 void VPNManager::updateStatus(const std::string& status) {
-    // This method should only be called from the main thread
-    currentStatus = status;
+    // Event delivery stays on the platform thread; cached state is shared.
+    {
+        std::lock_guard<std::mutex> lock(statusMutex);
+        currentStatus = status;
+    }
     if (eventSink) {
         eventSink->Success(flutter::EncodableValue(status));
     }
@@ -794,6 +651,7 @@ void VPNManager::updateStatus(const std::string& status) {
 void VPNManager::updateStatusThreadSafe(const std::string& status) {
     // Thread-safe method for background threads to queue status updates
     std::lock_guard<std::mutex> lock(statusMutex);
+    currentStatus = status;
     pendingStatusUpdates.push(status);
     std::cout << "Queued status update: " << status << " (from background thread)" << std::endl;
 }
@@ -805,7 +663,8 @@ void VPNManager::processPendingStatusUpdates() {
         std::string status = pendingStatusUpdates.front();
         pendingStatusUpdates.pop();
         
-        // Update status using the main thread
+        // A queued success may have been revoked by a restart or child exit.
+        if (status == "connected" && !checkConnectionStatus()) continue;
         currentStatus = status;
         if (eventSink) {
             eventSink->Success(flutter::EncodableValue(status));
@@ -816,186 +675,71 @@ void VPNManager::processPendingStatusUpdates() {
 
 bool VPNManager::createConfigFile(const std::string& config, const std::string& username, const std::string& password) {
     try {
-        // Use app directory instead of user temp to ensure elevated process can access it
-        std::string appDir = getAppDirectory();
-        currentConfigPath = appDir + "\\openvpn_flutter_config.ovpn";
-        
-        std::cout << "Creating config file at: " << currentConfigPath << std::endl;
-        
-        std::ofstream configFile(currentConfigPath);
-        if (!configFile.is_open()) {
-            return false;
-        }
-        
-        // Modify config based on driver type
-        std::string modifiedConfig = config;
-        
-        // Remove deprecated client-cert-not-required option if present
-        size_t pos = 0;
-        while ((pos = modifiedConfig.find("client-cert-not-required", pos)) != std::string::npos) {
-            size_t endPos = modifiedConfig.find('\n', pos);
-            if (endPos == std::string::npos) endPos = modifiedConfig.length();
-            modifiedConfig.erase(pos, endPos - pos + 1);
-        }
-        
-        // When using WinTun, remove dev/dev-type directives from config file
-        // We specify them on the command line instead to avoid conflicts
-        if (currentDriver == DriverType::WINTUN) {
-            // Remove 'dev tap' lines
-            pos = 0;
-            while ((pos = modifiedConfig.find("dev tap", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++;
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++;
-                
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("dev tap") != std::string::npos && 
-                    line.find('#') == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart;
-                    std::cout << "Removed 'dev tap' line for WinTun" << std::endl;
-                } else {
-                    pos = lineEnd;
-                }
+        char temporaryDirectory[MAX_PATH]{};
+        const DWORD temporaryLength = GetTempPathA(MAX_PATH, temporaryDirectory);
+        if (temporaryLength == 0 || temporaryLength >= MAX_PATH || ownedAdapterAlias.empty()) return false;
+        currentConfigPath = std::string(temporaryDirectory) + ownedAdapterAlias + ".ovpn";
+        currentLogPath = currentConfigPath + ".log";
+        std::ofstream configFile(currentConfigPath, std::ios::trunc);
+        std::ofstream freshLog(currentLogPath, std::ios::trunc);
+        if (!configFile || !freshLog) return false;
+
+        deviceType = "tun";
+        std::string explicitType;
+        std::istringstream input(config);
+        std::string line;
+        bool inlineBlock = false;
+        while (std::getline(input, line)) {
+            std::istringstream fields(line);
+            std::string option, value;
+            fields >> option >> std::quoted(value);
+            if (value.size() >= 2 && value.front() == '\'' && value.back() == '\'') value = value.substr(1, value.size() - 2);
+            if (option.rfind("</", 0) == 0) inlineBlock = false;
+            if (inlineBlock) {
+                configFile << line << '\n';
+                continue;
             }
-            
-            // Remove any existing windows-driver directives first (we'll add the correct one)
-            pos = 0;
-            while ((pos = modifiedConfig.find("windows-driver", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++;
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++;
-                
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("windows-driver") != std::string::npos && 
-                    line.find('#') == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart;
-                    std::cout << "Removed existing 'windows-driver' line from config (will add correct one)" << std::endl;
-                } else {
-                    pos = lineEnd;
-                }
-            }
-            
-            // Add 'windows-driver wintun' - REQUIRED for OpenVPN 2.6.14+ WinTun
-            // This directive tells OpenVPN to use WinTun driver on Windows
-            // Note: 'dev tun' is already in the config file from the API
-            if (modifiedConfig.find("windows-driver wintun") == std::string::npos) {
-                // Add after 'dev tun' line (which should already exist)
-                size_t devTunPos = modifiedConfig.find("dev tun");
-                if (devTunPos != std::string::npos) {
-                    size_t devTunLineEnd = modifiedConfig.find('\n', devTunPos);
-                    if (devTunLineEnd != std::string::npos) {
-                        modifiedConfig.insert(devTunLineEnd + 1, "windows-driver wintun\n");
-                        std::cout << "Added 'windows-driver wintun' to config file (REQUIRED for WinTun)" << std::endl;
-                    }
-                } else {
-                    // Fallback: if dev tun not found, add after remote
-                    size_t insertPos = modifiedConfig.find("remote ");
-                    if (insertPos != std::string::npos) {
-                        size_t remoteLineEnd = modifiedConfig.find('\n', insertPos);
-                        if (remoteLineEnd != std::string::npos) {
-                            modifiedConfig.insert(remoteLineEnd + 1, "windows-driver wintun\n");
-                            std::cout << "Added 'windows-driver wintun' to config file (REQUIRED for WinTun)" << std::endl;
-                        }
-                    }
-                }
-            } else {
-                std::cout << "Found 'windows-driver wintun' in config - keeping it" << std::endl;
-            }
-            
-            // Remove 'persist-tun' as it may conflict with WinTun
-            pos = 0;
-            while ((pos = modifiedConfig.find("persist-tun", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++;
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++;
-                
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("persist-tun") != std::string::npos && 
-                    line.find('#') == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart;
-                    std::cout << "Removed 'persist-tun' line for WinTun compatibility" << std::endl;
-                } else {
-                    pos = lineEnd;
-                }
-            }
-            
-            // Remove any existing dev-type directives (we specify on command line)
-            pos = 0;
-            while ((pos = modifiedConfig.find("dev-type", pos)) != std::string::npos) {
-                size_t lineStart = modifiedConfig.rfind('\n', pos);
-                if (lineStart == std::string::npos) lineStart = 0;
-                else lineStart++;
-                
-                size_t lineEnd = modifiedConfig.find('\n', pos);
-                if (lineEnd == std::string::npos) lineEnd = modifiedConfig.length();
-                else lineEnd++;
-                
-                std::string line = modifiedConfig.substr(lineStart, lineEnd - lineStart);
-                if (line.find("dev-type") != std::string::npos && 
-                    line.find('#') == std::string::npos) {
-                    modifiedConfig.erase(lineStart, lineEnd - lineStart);
-                    pos = lineStart;
-                    std::cout << "Removed 'dev-type' line from config (using command line instead)" << std::endl;
-                } else {
-                    pos = lineEnd;
-                }
-            }
+            if (!option.empty() && option.front() == '<' && option.rfind("</", 0) != 0 && option != "<connection>") inlineBlock = true;
+            if (option.rfind("--", 0) == 0) option.erase(0, 2);
+            if (option == "dev") deviceType = value.rfind("tap", 0) == 0 ? "tap" : "tun";
+            if (option == "dev-type") explicitType = value;
+            if (option == "dev" || option == "dev-type" || option == "dev-node" || option == "windows-driver" ||
+                option == "log" || option == "log-append" || option == "machine-readable-output" ||
+                option == "client-cert-not-required" ||
+                (option == "persist-tun" && currentDriver == DriverType::WINTUN)) continue;
+            configFile << line << '\n';
         }
-        
-        configFile << modifiedConfig;
-        
-        if (currentDriver == DriverType::WINTUN) {
-            std::cout << "Modified config for WinTun compatibility:" << std::endl;
-            std::cout << "  - Config file: 'dev tun' (from API) + 'windows-driver wintun' (added)" << std::endl;
-            std::cout << "  - Command line: Basic options only (WinTun configured via config file)" << std::endl;
-        } else {
-            std::cout << "Using original config from API without modifications" << std::endl;
-        }
-        
-        // DEBUG: Show full config content for WinTun
-        if (currentDriver == DriverType::WINTUN) {
-            std::cout << "DEBUG: Full modified config content:" << std::endl;
-            std::cout << modifiedConfig << std::endl;
-            std::cout << "DEBUG: End of modified config" << std::endl;
-        } else {
-            std::cout << "Config preview (first 500 chars): " << modifiedConfig.substr(0, 500) << std::endl;
-        }
-        
+        if (!explicitType.empty()) deviceType = explicitType;
+        if ((deviceType != "tun" && deviceType != "tap") ||
+            (currentDriver == DriverType::WINTUN && deviceType != "tun")) return false;
         if (!username.empty() && !password.empty()) {
-            std::string authPath = appDir + "\\openvpn_flutter_auth.txt";
-            
-            std::ofstream authFile(authPath);
-            if (authFile.is_open()) {
-                authFile << username << "\n" << password;
-                authFile.close();
-                
-                configFile << "\nauth-user-pass \"" << authPath << "\"";
-            }
+            const auto authPath = currentConfigPath.substr(0, currentConfigPath.size() - 5) + "_auth.txt";
+            std::ofstream auth(authPath, std::ios::trunc);
+            if (!auth) return false;
+            auth << username << '\n' << password;
+            auto configurationAuthPath = authPath;
+            std::replace(configurationAuthPath.begin(), configurationAuthPath.end(), '\\', '/');
+            configFile << "auth-user-pass \"" << configurationAuthPath << "\"\n";
         }
-        
         configFile.close();
-        return true;
+        {
+            std::lock_guard<std::mutex> lock(connectionMutex);
+            logReadOffset = 0;
+            pendingLogLine.clear();
+            initializationComplete = false;
+            initializationFailed = false;
+        }
+        return !configFile.fail();
     } catch (...) {
         return false;
     }
 }
 
 void VPNManager::cleanupTempFiles() {
+    if (!currentLogPath.empty()) {
+        DeleteFileA(currentLogPath.c_str());
+        currentLogPath.clear();
+    }
     if (!currentConfigPath.empty()) {
         DeleteFileA(currentConfigPath.c_str());
         
@@ -1010,52 +754,10 @@ void VPNManager::cleanupTempFiles() {
     }
 }
 
-std::string VPNManager::findTapAdapter() {
-    // Enumerate network adapters to find TAP adapter
-    ULONG bufferSize = 0;
-    GetAdaptersAddresses(AF_UNSPEC, 0, NULL, NULL, &bufferSize);
-    
-    if (bufferSize > 0) {
-        std::vector<char> buffer(bufferSize);
-        PIP_ADAPTER_ADDRESSES adapters = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
-        
-        if (GetAdaptersAddresses(AF_UNSPEC, 0, NULL, adapters, &bufferSize) == NO_ERROR) {
-            for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL; adapter = adapter->Next) {
-                if (adapter->Description && 
-                    (wcsstr(adapter->Description, L"TAP-Windows") != NULL || 
-                     wcsstr(adapter->Description, L"TAP-Win32") != NULL)) {
-                    // AdapterName is already a narrow string (PCHAR)
-                    return std::string(adapter->AdapterName);
-                }
-            }
-        }
-    }
-    
-    return "";
-}
-
 bool VPNManager::createTapAdapter() {
-    std::string tapInstallPath = findBundledExecutable("tapinstall.exe");
-    if (tapInstallPath.empty()) {
-        return false;
-    }
-    
-    std::string createCmd = "\"" + tapInstallPath + "\" create tap0901 OpenVPN_TAP";
-    return runAsAdmin(createCmd);
-}
-
-bool VPNManager::enableTapAdapter() {
-    if (tapAdapterName.empty()) return false;
-    
-    std::string cmd = "netsh interface set interface \"" + tapAdapterName + "\" admin=enable";
-    return runAsAdmin(cmd);
-}
-
-bool VPNManager::disableTapAdapter() {
-    if (tapAdapterName.empty()) return false;
-    
-    std::string cmd = "netsh interface set interface \"" + tapAdapterName + "\" admin=disable";
-    return runAsAdmin(cmd);
+    // tapctl creates a dedicated TAP-Windows6 instance with a unique alias.
+    // A foreign installed TAP instance is never adopted as a fallback.
+    return createOwnedAdapter("root\\tap0901");
 }
 
 bool VPNManager::runAsAdmin(const std::string& command, const std::string& params) {
@@ -1117,46 +819,11 @@ void VPNManager::setPreferredDriver(DriverType type, bool allowFallback) {
 }
 
 std::pair<uint64_t, uint64_t> VPNManager::getRealNetworkStats() {
-    uint64_t bytesIn = 0;
-    uint64_t bytesOut = 0;
-    
-    // Get network adapter statistics
-    ULONG bufferSize = 0;
-    GetAdaptersAddresses(AF_UNSPEC, 0, NULL, NULL, &bufferSize);
-    
-    if (bufferSize > 0) {
-        std::vector<char> buffer(bufferSize);
-        PIP_ADAPTER_ADDRESSES adapters = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
-        
-        if (GetAdaptersAddresses(AF_UNSPEC, 0, NULL, adapters, &bufferSize) == NO_ERROR) {
-            for (PIP_ADAPTER_ADDRESSES adapter = adapters; adapter != NULL; adapter = adapter->Next) {
-                // Look for VPN-related adapters
-                if (adapter->Description && 
-                    (wcsstr(adapter->Description, L"TAP-Windows") != NULL ||
-                     wcsstr(adapter->Description, L"OpenVPN") != NULL ||
-                     wcsstr(adapter->Description, L"WinTun") != NULL ||
-                     wcsstr(adapter->Description, L"Wintun") != NULL ||
-                     wcsstr(adapter->Description, L"Data Channel Offload") != NULL)) {
-                    
-                    // Get interface statistics using GetIfEntry2
-                    MIB_IF_ROW2 ifRow;
-                    ZeroMemory(&ifRow, sizeof(ifRow));
-                    ifRow.InterfaceIndex = adapter->IfIndex;
-                    
-                    if (GetIfEntry2(&ifRow) == NO_ERROR) {
-                        bytesIn += ifRow.InOctets;
-                        bytesOut += ifRow.OutOctets;
-                        
-                        std::wcout << L"Found VPN adapter: " << adapter->Description 
-                                  << L" - In: " << ifRow.InOctets 
-                                  << L" Out: " << ifRow.OutOctets << std::endl;
-                    }
-                }
-            }
-        }
-    }
-    
-    return std::make_pair(bytesIn, bytesOut);
+    if (!checkConnectionStatus()) return {0, 0};
+    std::lock_guard<std::mutex> lock(connectionMutex);
+    MIB_IF_ROW2 row{};
+    if (!readOwnedAdapterRow(row)) return {0, 0};
+    return {row.InOctets, row.OutOctets};
 }
 
 void VPNManager::updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, const std::chrono::system_clock::time_point& now) {
@@ -1180,8 +847,8 @@ void VPNManager::updateSpeedCalculations(uint64_t bytesIn, uint64_t bytesOut, co
     // This prevents division by very small numbers and reduces jitter
     if (timeDiffSeconds >= 0.1) {
         // Calculate byte differences
-        uint64_t byteInDiff = bytesIn - lastBytesIn;
-        uint64_t byteOutDiff = bytesOut - lastBytesOut;
+        uint64_t byteInDiff = bytesIn >= lastBytesIn ? bytesIn - lastBytesIn : 0;
+        uint64_t byteOutDiff = bytesOut >= lastBytesOut ? bytesOut - lastBytesOut : 0;
         
         // Calculate raw speeds (bytes per second)
         double rawSpeedIn = byteInDiff / timeDiffSeconds;

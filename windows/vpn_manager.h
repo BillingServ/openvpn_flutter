@@ -1,6 +1,10 @@
 #pragma once
 
 #include <windows.h>
+#include <ifdef.h>
+#include <ios>
+
+typedef struct _MIB_IF_ROW2 MIB_IF_ROW2;
 #include <string>
 #include <memory>
 #include <atomic>
@@ -42,8 +46,25 @@ private:
     std::unique_ptr<WinTunManager> wintunManager;
     
     // TAP adapter management (fallback)
-    std::string tapAdapterName;
     bool tapDriverInstalled = false;
+
+    // Identity selected by --dev-node for this manager's OpenVPN child.
+    GUID ownedAdapterGuid{};
+    NET_LUID ownedAdapterLuid{};
+    std::string ownedAdapterNode;
+    std::string ownedAdapterAlias;
+    std::string ownedAdapterToolPath;
+    bool hasOwnedAdapter = false;
+    std::string deviceType = "tun";
+
+    // A fresh child log provides establishment/restart evidence. Guard both
+    // log parsing and identity reads used by the monitor and platform thread.
+    std::mutex connectionMutex;
+    std::string currentLogPath;
+    std::streamoff logReadOffset = 0;
+    std::string pendingLogLine;
+    bool initializationComplete = false;
+    bool initializationFailed = false;
     
     // Thread-safe status updates
     std::mutex statusMutex;
@@ -93,13 +114,15 @@ private:
     bool createConfigFile(const std::string& config, const std::string& username, const std::string& password);
     void cleanupTempFiles();
     bool checkConnectionStatus();
-    bool checkTapAdapterStatus();
+    bool readConnectionLog(); // connectionMutex must be held
+    bool readOwnedAdapterRow(MIB_IF_ROW2& row);
+    bool captureOwnedAdapter(const std::string& alias);
+    bool createOwnedAdapter(const std::string& hardwareId);
+    void releaseOwnedAdapter();
+    bool runAdapterTool(const std::string& path, const std::string& arguments);
     
     // TAP adapter utilities
-    std::string findTapAdapter();
     bool createTapAdapter();
-    bool enableTapAdapter();
-    bool disableTapAdapter();
     
     // Registry and system utilities
     bool runAsAdmin(const std::string& command, const std::string& params = "");
