@@ -11,8 +11,11 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.Log;
 
+import java.io.IOException;
+import java.io.StringReader;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
@@ -23,10 +26,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
-import de.blinkt.openvpn.OpenVpnApi;
+import de.blinkt.openvpn.R;
+import de.blinkt.openvpn.VpnProfile;
+import de.blinkt.openvpn.core.ConfigParser;
 import de.blinkt.openvpn.core.ConnectionStatus;
 import de.blinkt.openvpn.core.OpenVPNService;
 import de.blinkt.openvpn.core.OpenVPNThread;
+import de.blinkt.openvpn.core.ProfileManager;
+import de.blinkt.openvpn.core.VPNLaunchHelper;
 import de.blinkt.openvpn.core.VpnStatus;
 
 /**
@@ -248,7 +255,7 @@ public final class OpenVpnRuntime {
             startRequestedAt = SystemClock.elapsedRealtime();
             updateStage("prepare");
             try {
-                OpenVpnApi.startVpn(appContext, config, name, username, password, bypassPackages);
+                startVpn(appContext, config, name, username, password, bypassPackages);
                 if (generation != stopGeneration.get()) {
                     killProcess();
                     requestStopViaService(2000L);
@@ -261,6 +268,39 @@ public final class OpenVpnRuntime {
             }
         } finally {
             operationLock.unlock();
+        }
+    }
+
+    /**
+     * OpenVpnApi.startVpn, except that bypass packages are only excluded from the tunnel.
+     * The library also turns on allowBypass for them, which lets any app opt out of the VPN.
+     */
+    private static void startVpn(Context context, String config, String name, String username,
+                                 String password, List<String> bypassPackages) throws RemoteException {
+        if (config == null || config.isEmpty()) {
+            throw new RemoteException("config is empty");
+        }
+        try {
+            ConfigParser parser = new ConfigParser();
+            parser.parseConfig(new StringReader(config));
+            VpnProfile profile = parser.convertProfile();
+            profile.mName = name;
+            int check = profile.checkProfile(context);
+            if (check != R.string.no_error_found) {
+                throw new RemoteException(context.getString(check));
+            }
+            profile.mProfileCreator = context.getPackageName();
+            profile.mUsername = username;
+            profile.mPassword = password;
+            if (bypassPackages != null && !bypassPackages.isEmpty()) {
+                profile.mAllowedAppsVpnAreDisallowed = true;
+                profile.mAllowAppVpnBypass = false;
+                profile.mAllowedAppsVpn = new HashSet<>(bypassPackages);
+            }
+            ProfileManager.setTemporaryProfile(context, profile);
+            VPNLaunchHelper.startOpenVpn(profile, context);
+        } catch (IOException | ConfigParser.ConfigParseError e) {
+            throw new RemoteException(e.getMessage());
         }
     }
 

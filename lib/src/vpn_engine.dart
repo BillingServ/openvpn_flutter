@@ -133,7 +133,7 @@ class OpenVPN {
   ///
   ///username & password : set your username and password if your config file has auth-user-pass
   ///
-  ///bypassPackages : exclude some apps to access/use the VPN Connection, it was List<String> of applications package's name (Android Only)
+  ///bypassPackages : package names of apps kept outside the VPN connection (Android only)
   Future connect(String config, String name,
       {String? username,
       String? password,
