@@ -134,10 +134,16 @@ class OpenVPN {
   ///username & password : set your username and password if your config file has auth-user-pass
   ///
   ///bypassPackages : package names of apps kept outside the VPN connection (Android only)
+  ///
+  ///onDemand : keep the tunnel up, restarting it if it drops (iOS only)
+  ///
+  ///includeAllNetworks : send all traffic but the local network's through the tunnel, blocking it whenever the tunnel isn't passing it (iOS only)
   Future connect(String config, String name,
       {String? username,
       String? password,
       List<String>? bypassPackages,
+      bool onDemand = false,
+      bool includeAllNetworks = false,
       bool certIsRequired = false}) {
     if (!initialized) throw ("OpenVPN need to be initialized");
     // Remove automatic addition of cert options - config should be complete
@@ -155,7 +161,9 @@ class OpenVPN {
         "name": name,
         "username": username,
         "password": password,
-        "bypass_packages": bypassPackages ?? []
+        "bypass_packages": bypassPackages ?? [],
+        "onDemand": onDemand,
+        "includeAllNetworks": includeAllNetworks,
       });
       print('🔧 OpenVPN Plugin: _channelControl.invokeMethod("connect") called successfully');
       return result;

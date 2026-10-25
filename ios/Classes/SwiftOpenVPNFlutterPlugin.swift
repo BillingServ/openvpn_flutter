@@ -93,6 +93,8 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 let config: String? = (call.arguments as? [String : Any])? ["config"] as? String
                 let username: String? = (call.arguments as? [String : Any])? ["username"] as? String
                 let password: String? = (call.arguments as? [String : Any])? ["password"] as? String
+                let onDemand = (call.arguments as? [String : Any])?["onDemand"] as? Bool ?? false
+                let includeAllNetworks = (call.arguments as? [String : Any])?["includeAllNetworks"] as? Bool ?? false
                 if config == nil{
                     result(FlutterError(code: "-2",
                                         message:"Config is empty or nulled",
@@ -100,7 +102,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                     return
                 }
                 
-                SwiftOpenVPNFlutterPlugin.utils?.configureVPN(config: config, username: username, password: password, completion: {(success:Error?) -> Void in
+                SwiftOpenVPNFlutterPlugin.utils?.configureVPN(config: config, username: username, password: password, onDemand: onDemand, includeAllNetworks: includeAllNetworks, completion: {(success:Error?) -> Void in
                     if(success == nil){
                         result(nil)
                     }else{
@@ -161,7 +163,10 @@ class VPNUtils {
     func ownsManager(_ manager: NETunnelProviderManager) -> Bool {
         guard let identifier = providerBundleIdentifier, !identifier.isEmpty,
               let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol else { return false }
-        return configuration.providerBundleIdentifier == identifier
+        // The packet-drop blocker uses this same extension, but is not a VPN
+        // session and must never be adopted, reported connected or overwritten.
+        return configuration.providerBundleIdentifier == identifier &&
+            configuration.providerConfiguration?["killSwitchMode"] as? Bool != true
     }
 
     func ownsConnection(_ connection: NEVPNConnection) -> Bool {
@@ -239,7 +244,9 @@ class VPNUtils {
         }
     }
     
-    func configureVPN(config: String?, username : String?,password : String?,completion:@escaping (_ error : Error?) -> Void) {
+    func configureVPN(config: String?, username : String?,password : String?,
+                      onDemand: Bool = false, includeAllNetworks: Bool = false,
+                      completion:@escaping (_ error : Error?) -> Void) {
         operationGeneration &+= 1
         let generation = operationGeneration
         let previousStart = pendingStart
@@ -272,9 +279,20 @@ class VPNUtils {
                     "password" : password?.data(using: .utf8) ?? nullData!
                 ]
                 tunnelProtocol.disconnectOnSleep = false
+                // All traffic but the local network's goes through the tunnel, and
+                // is blocked whenever the tunnel isn't passing it.
+                if #available(iOS 14.2, *) {
+                    tunnelProtocol.includeAllNetworks = includeAllNetworks
+                    tunnelProtocol.excludeLocalNetworks = includeAllNetworks
+                }
                 self.providerManager.protocolConfiguration = tunnelProtocol
                 self.providerManager.localizedDescription = self.localizedDescription // the title of the VPN profile which will appear on Settings
                 self.providerManager.isEnabled = true
+                // Keeps the tunnel up: the system restarts it whenever it drops.
+                let connectRule = NEOnDemandRuleConnect()
+                connectRule.interfaceTypeMatch = .any
+                self.providerManager.onDemandRules = onDemand ? [connectRule] : nil
+                self.providerManager.isOnDemandEnabled = onDemand
                 self.providerManager.saveToPreferences(completionHandler: { (error) in
                     guard self.operationGeneration == generation else { return }
                     if error == nil  {
@@ -334,7 +352,22 @@ class VPNUtils {
         cancelledStart?(NSError(domain: "OpenVPNFlutter", code: 3,
             userInfo: [NSLocalizedDescriptionKey: "Stopped"]))
         if let manager = providerManager, ownsManager(manager) {
-            manager.connection.stopVPNTunnel()
+            // A deliberate stop: with on-demand still on, the system would
+            // start the tunnel again straight away, and with all networks
+            // included it would keep blocking traffic while it is down.
+            let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol
+            var blocksWhileDown = false
+            if #available(iOS 14.0, *) { blocksWhileDown = configuration?.includeAllNetworks == true }
+            if manager.isOnDemandEnabled || blocksWhileDown {
+                manager.isOnDemandEnabled = false
+                if #available(iOS 14.2, *) {
+                    configuration?.includeAllNetworks = false
+                    configuration?.excludeLocalNetworks = false
+                }
+                manager.saveToPreferences { _ in manager.connection.stopVPNTunnel() }
+            } else {
+                manager.connection.stopVPNTunnel()
+            }
         };
     }
     
