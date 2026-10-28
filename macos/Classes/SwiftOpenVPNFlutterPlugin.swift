@@ -125,6 +125,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                 let config: String? = (call.arguments as? [String : Any])? ["config"] as? String
                 let username: String? = (call.arguments as? [String : Any])? ["username"] as? String
                 let password: String? = (call.arguments as? [String : Any])? ["password"] as? String
+                let includeAllNetworks = (call.arguments as? [String : Any])?["includeAllNetworks"] as? Bool ?? false
                 
                 if config == nil{
                     result(FlutterError(code: "-2",
@@ -133,7 +134,7 @@ public class SwiftOpenVPNFlutterPlugin: NSObject, FlutterPlugin {
                     return
                 }
                 
-                self.utils.configureVPN(config: config, username: username, password: password, completion: {(success:Error?) -> Void in
+                self.utils.configureVPN(config: config, username: username, password: password, includeAllNetworks: includeAllNetworks, completion: {(success:Error?) -> Void in
                     if(success == nil){
                         result(nil)
                     }else{
@@ -347,7 +348,9 @@ class VPNUtils {
         return "disconnected"
     }
     
-    func configureVPN(config: String?, username : String?,password : String?,completion:@escaping (_ error : Error?) -> Void) {
+    func configureVPN(config: String?, username : String?,password : String?,
+                      includeAllNetworks: Bool = false,
+                      completion:@escaping (_ error : Error?) -> Void) {
         operationGeneration &+= 1
         let generation = operationGeneration
         let previousStart = pendingStart
@@ -382,6 +385,10 @@ class VPNUtils {
                     "password": password ?? ""
                 ]
                 tunnelProtocol.disconnectOnSleep = false
+                // All traffic but the local network's goes through the tunnel, and
+                // is blocked whenever the tunnel isn't passing it.
+                tunnelProtocol.includeAllNetworks = includeAllNetworks
+                tunnelProtocol.excludeLocalNetworks = includeAllNetworks
                 
                 self.providerManager.protocolConfiguration = tunnelProtocol
                 self.providerManager.localizedDescription = self.localizedDescription
@@ -428,9 +435,16 @@ class VPNUtils {
         pendingStart = nil
         cancelledStart?(NSError(domain: "OpenVPNFlutter", code: 3,
             userInfo: [NSLocalizedDescriptionKey: "Stopped"]))
-        // Stop the tunnel immediately
+        // Stop the tunnel immediately. With all networks included the system
+        // would keep blocking traffic while it is down, so that goes off too.
         if let manager = providerManager, ownsManager(manager) {
             manager.connection.stopVPNTunnel()
+            if let configuration = manager.protocolConfiguration as? NETunnelProviderProtocol,
+               configuration.includeAllNetworks {
+                configuration.includeAllNetworks = false
+                configuration.excludeLocalNetworks = false
+                manager.saveToPreferences { _ in }
+            }
         }
 
         // Clear connection update to avoid showing stale stats. Reuse the cached
