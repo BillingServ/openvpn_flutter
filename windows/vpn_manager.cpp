@@ -36,7 +36,11 @@ std::string guidString(const GUID& guid) {
     wchar_t text[40]{};
     if (!StringFromGUID2(guid, text, 40)) return "";
     const std::wstring value(text);
-    return std::string(value.begin(), value.end());
+    std::string result(value.size(), '\0');
+    // GUID text contains only ASCII braces, hyphens, and hexadecimal digits.
+    std::transform(value.begin(), value.end(), result.begin(),
+                   [](wchar_t ch) { return static_cast<char>(ch); });
+    return result;
 }
 
 std::string newAdapterAlias() {
